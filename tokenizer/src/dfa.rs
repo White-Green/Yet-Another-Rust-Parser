@@ -167,8 +167,7 @@ impl<'a> TokenizerDFA<'a> {
                         .insert(node.reference());
                 }
                 updated |= split_group.len() > 1;
-                let mut iter = split_group.into_iter();
-                while let Some((_, set)) = iter.next() {
+                for (_, set) in split_group.into_iter() {
                     for node in set {
                         new_group_map.insert(node, max_index);
                     }
@@ -457,7 +456,7 @@ mod tests {
         assert_eq!(HashSet::<DFAConstructWarning>::from_iter(warnings.into_iter()), seq![DFAConstructWarning::EndIsBatting(1, 0), DFAConstructWarning::EndIsBatting(2, 1)]);
         assert!(tokenizer_dfa_index_isomorphisms(&tokenizer_dfa_to_index(&dfa.minify()), &(vec![seq![(CharRange{range: 'a' as u32..'a' as u32 + 1 },1),(CharRange{range: 'b' as u32..'c' as u32 + 1 },2),(CharRange{range: 'd' as u32..'f' as u32 + 1 },3)], seq![], seq![], seq![]], 0, seq![(1,0),(2,1),(3,2)])));
 
-        let nfa = TokenizerNFA::try_from(vec!["(計算機[工科]|数)学"/*, "B2|(学部)?2[年回]生"*/]).unwrap();
+        let nfa = TokenizerNFA::try_from(vec!["(計算機[工科]|数)学", "B2|(学部)?2[年回]生"]).unwrap();
 
         let index = tokenizer_nfa_to_index(&nfa);
         println!("(");
@@ -470,13 +469,14 @@ mod tests {
         let index = tokenizer_dfa_to_index(&dfa);
         println!("DFA:\n(");
         for (x, i) in index.0.iter().zip(0..) {
-            println!("\t{}: {:X?}", i, x);
+            println!("\t{}: {:?}", i, x);
         }
         println!("begin: {}, end: {:?})", index.1, index.2);
         let dfa = dfa.minify();
+        let index = tokenizer_dfa_to_index(&dfa);
         println!("DFA:\n(");
         for (x, i) in index.0.iter().zip(0..) {
-            println!("\t{}: {:X?}", i, x);
+            println!("\t{}: {:?}", i, x);
         }
         println!("begin: {}, end: {:?})", index.1, index.2);
     }

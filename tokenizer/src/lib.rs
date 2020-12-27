@@ -1,6 +1,8 @@
 use std::borrow::Borrow;
 use std::cmp::Ordering;
 use std::ops::Range;
+use std::fmt::Debug;
+use std::convert::TryFrom;
 
 mod nfa;
 mod dfa;
@@ -27,9 +29,17 @@ mod tests {
     }
 }
 
-#[derive(Eq, Hash, Clone, Debug)]
+#[derive(Eq, Hash, Clone)]
 struct CharRange {
     range: Range<u32>,
+}
+
+impl Debug for CharRange {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CharRange")
+            .field("range", &if self.range.end - self.range.start == 1 { char::try_from(self.range.start).unwrap_or('~').to_string() } else { format!("{}..={}", char::try_from(self.range.start).unwrap_or('~'), char::try_from(self.range.end - 1).unwrap_or('~')) })
+            .finish()
+    }
 }
 
 impl Borrow<u32> for CharRange {
