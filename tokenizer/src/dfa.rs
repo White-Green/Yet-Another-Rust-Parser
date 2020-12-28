@@ -216,8 +216,6 @@ impl<'a> TokenizerDFA<'a> {
             if prev_group.is_some() && (prev_group != Some(current_group) || prev_end != Some(range.range.start)) {
                 compressed_next.insert(CharRange { range: prev_begin.unwrap()..prev_end.unwrap() }, prev_group.unwrap());
                 prev_begin = None;
-                prev_end = None;
-                prev_group = None;
             }
             prev_begin = prev_begin.or(Some(range.range.start));
             prev_end = Some(range.range.end);
@@ -235,7 +233,7 @@ impl<'a> TokenizerDFA<'a> {
         if next_begin_map.len() <= 0 { return; }
         for i in 0..next_begin_map.len() - 1 {
             let upper = next_begin_map[i + 1].0;
-            let greater_keys = next_begin_map[i].1.range(upper..)
+            let greater_keys = next_begin_map[i].1.range(upper + 1..)
                 .map(|(k, _)| *k)
                 .collect::<Vec<_>>();
             if !greater_keys.is_empty() {
@@ -299,12 +297,24 @@ pub(crate) fn tokenizer_dfa_to_index(dfa: &TokenizerDFA) -> (Vec<BTreeMap<CharRa
 }
 
 #[cfg(test)]
+pub(crate) fn print_tokenizer_dfa(dfa: &TokenizerDFA) {
+    let index = tokenizer_dfa_to_index(&dfa);
+    println!("DFA:\n(");
+    for (x, i) in index.0.iter().zip(0..) {
+        println!("\t{}: {:?}", i, x);
+    }
+    println!("begin: {}, end: {:?})", index.1, index.2);
+}
+
+#[cfg(test)]
 mod tests {
-    use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+    use std::collections::{BTreeMap, HashSet, VecDeque};
     use std::convert::TryFrom;
     use std::iter::FromIterator;
 
-    use regex_syntax::hir::{Class, ClassUnicode, ClassUnicodeRange, Hir};
+    use rand::Rng;
+    use rand::rngs::ThreadRng;
+    use regex_syntax::hir::{Class, ClassUnicode, ClassUnicodeRange, Hir, Literal, Repetition, RepetitionKind, RepetitionRange};
 
     use crate::CharRange;
     use crate::dfa::{DFAConstructWarning, tokenizer_dfa_to_index, TokenizerDFA};
@@ -456,28 +466,125 @@ mod tests {
         assert_eq!(HashSet::<DFAConstructWarning>::from_iter(warnings.into_iter()), seq![DFAConstructWarning::EndIsBatting(1, 0), DFAConstructWarning::EndIsBatting(2, 1)]);
         assert!(tokenizer_dfa_index_isomorphisms(&tokenizer_dfa_to_index(&dfa.minify()), &(vec![seq![(CharRange{range: 'a' as u32..'a' as u32 + 1 },1),(CharRange{range: 'b' as u32..'c' as u32 + 1 },2),(CharRange{range: 'd' as u32..'f' as u32 + 1 },3)], seq![], seq![], seq![]], 0, seq![(1,0),(2,1),(3,2)])));
 
-        let nfa = TokenizerNFA::try_from(vec!["(計算機[工科]|数)学", "B2|(学部)?2[年回]生"]).unwrap();
+        let nfa = TokenizerNFA::try_from(vec!["([a-zA-Z]{2})*"]).unwrap();
+        let (dfa, _) = nfa.into();
+        let dfa: TokenizerDFA = dfa.minify();
+        assert!(tokenizer_dfa_index_isomorphisms(&tokenizer_dfa_to_index(&dfa), &(vec![seq![(CharRange{ range: 'a' as u32..'z' as u32 + 1 }, 1), (CharRange{ range: 'A' as u32..'Z' as u32 + 1 }, 1)], seq![(CharRange{ range: 'a' as u32..'z' as u32 + 1 }, 0), (CharRange{ range: 'A' as u32..'Z' as u32 + 1 }, 0)]], 0, seq![(0, 0)])));
 
-        let index = tokenizer_nfa_to_index(&nfa);
-        println!("(");
-        for (x, i) in index.0.iter().zip(0..) {
-            println!("\t{}: {:?}", i, x);
+        let nfa = TokenizerNFA::try_from(vec!["(.|\\n){2,5}"]).unwrap();
+        let (dfa, _) = nfa.into();
+        let dfa: TokenizerDFA = dfa.minify();
+        assert!(tokenizer_dfa_index_isomorphisms(&tokenizer_dfa_to_index(&dfa), &(vec![seq![(CharRange{ range: 0..'\u{10ffff}' as u32 + 1 }, 1)], seq![(CharRange{ range: 0..'\u{10ffff}' as u32 + 1 }, 2)], seq![(CharRange{ range: 0..'\u{10ffff}' as u32 + 1 }, 3)], seq![(CharRange{ range: 0..'\u{10ffff}' as u32 + 1 }, 4)], seq![(CharRange{ range: 0..'\u{10ffff}' as u32 + 1 }, 5)], seq![]], 0, seq![(2, 0), (3, 0), (4, 0), (5, 0)])));
+
+        let nfa = TokenizerNFA::try_from(vec!["みみ[た-ゎ]", "てめた*?", "ぺ[ぼ-るゎ-わ]+?ぅ", "ゅ[め-ゅ][べ-み]るめ"]).unwrap();
+        let (dfa, _) = nfa.into();
+        let dfa: TokenizerDFA = dfa.minify();
+        assert!(tokenizer_dfa_index_isomorphisms(&tokenizer_dfa_to_index(&dfa), &(vec![], 0, seq![])));
+
+        let nfa = TokenizerNFA::try_from(vec!["[ぺ-もよ-ろ]*し[が-ばひ-ゎ]", "[も-ゎ]*[の-もりわ]|[ま-れわ]|[ご-とも-ろ][ぉ-やろ-わ]|[と-は]?|て*"]).unwrap();
+        let (dfa, _) = nfa.into();
+        let dfa: TokenizerDFA = dfa.minify();
+        assert!(tokenizer_dfa_index_isomorphisms(&tokenizer_dfa_to_index(&dfa), &(vec![], 0, seq![])));
+
+        let nfa = TokenizerNFA::try_from(vec!["[も-ょら-ろ][ず-たま-わ][なひ-ょら-り][せ-ぷぽ-ゅ]さげ|[り-ゎ]|ひ*っ{6,6}?", "[で-ぼめ-もゆ-わ][は-ま][げ-ぶも-ょ]+?[ぎ-むゃ-ら]めぼ"]).unwrap();
+        let (dfa, _) = nfa.into();
+        let dfa: TokenizerDFA = dfa.minify();
+        assert!(tokenizer_dfa_index_isomorphisms(&tokenizer_dfa_to_index(&dfa), &(vec![], 0, seq![])));
+
+        let nfa = TokenizerNFA::try_from(vec!["けと[あ-つぽ-め][れ-ろ]|ぇ[ざ-わ]|[わ]{2,2}?|[い-れ][え-むよ-れ]?ぱ|の*|ぷ*|ばち?", "ざ{5}[そ-っぬ-ほょ-ゎ]|し|ぉ[ま-むり-れ]|ばひぉわびぽ*ぺ[ぢ-ゅる-わ]{8,}*[る-わ]*?ぽく|も|ろ[み-わ]じ{3}?[ぢ-わ]る[び-めろ-わ]び|[よ-ろ]*?|ぼ?|と{3}?ひ|[に-みゎ-わ]"]).unwrap();
+        let (dfa, _) = nfa.into();
+        let dfa: TokenizerDFA = dfa.minify();
+        assert!(tokenizer_dfa_index_isomorphisms(&tokenizer_dfa_to_index(&dfa), &(vec![], 0, seq![])));
+
+        let nfa = TokenizerNFA::try_from(vec!["[ぱ-ゃわ][つ-るゎ-わ][ろ-ゎ]*|の", "き[ぼ-めゅ-る]|に[ら-る]", "に[づ-てゅ-らる-ゎ][ゃ-やる-ろ]"]).unwrap();
+        let (dfa, _) = nfa.into();
+        let dfa: TokenizerDFA = dfa.minify();
+        assert!(tokenizer_dfa_index_isomorphisms(&tokenizer_dfa_to_index(&dfa), &(vec![], 0, seq![])));
+
+        let nfa = TokenizerNFA::try_from(vec!["でき|[ら-わ]*{9,10}?[ろ-ゎ][ぐ-ろ]", "[ゅ-る]で[あ-て]さ[ぎ-ぺも-ら]"]).unwrap();
+        let (dfa, _) = nfa.into();
+        let dfa: TokenizerDFA = dfa.minify();
+        assert!(tokenizer_dfa_index_isomorphisms(&tokenizer_dfa_to_index(&dfa), &(vec![], 0, seq![])));
+
+        let nfa = TokenizerNFA::try_from(vec!["ぃ*?ぽやは[へ-や]だ{9}?", "[の-びほ-もゅ-ろ]も[む-よれ]", "[は-わ]ゎゃ", "ぢ[ず-ちぱ-ろ][ろ-わ]"]).unwrap();
+        let (dfa, _) = nfa.into();
+        let dfa: TokenizerDFA = dfa.minify();
+        assert!(tokenizer_dfa_index_isomorphisms(&tokenizer_dfa_to_index(&dfa), &(vec![], 0, seq![])));
+
+        let nfa = TokenizerNFA::try_from(vec!["ゅこ*|ぬ|[ぼ-り]ぶ[れ-ゎ]|おひ|ゆぺ*あ*[ぬ-まれ-わ]", "[む-わ][ず-ぷよる-わ][か-でみ-れ]"]).unwrap();
+        let (dfa, _) = nfa.into();
+        let dfa: TokenizerDFA = dfa.minify();
+        assert!(tokenizer_dfa_index_isomorphisms(&tokenizer_dfa_to_index(&dfa), &(vec![], 0, seq![])));
+
+        // for i in 0..100 {
+        //     let mut rng = rand::thread_rng();
+        //
+        //     let mut vec = vec![
+        //         random_hir(&mut rng),
+        //         random_hir(&mut rng),
+        //         random_hir(&mut rng),
+        //     ];
+        //     println!("{}:{}", i, Hir::concat(vec));
+        // }
+    }
+
+    fn random_hir(rng: &mut ThreadRng) -> Hir {
+        const CHAR_BEGIN: char = '\u{3041}';
+        const CHAR_END: char = '\u{308f}';
+        match rng.gen_range(0..5) {
+            0 => Hir::literal(Literal::Unicode(rng.gen_range(CHAR_BEGIN..=CHAR_END))),
+            1 => {
+                let mut ranges = Vec::new();
+                let mut min = CHAR_BEGIN as u32;
+                loop {
+                    let begin = rng.gen_range(min..=CHAR_END as u32 + if ranges.len() > 0 { 1 } else { 0 });
+                    let end = rng.gen_range(begin..=CHAR_END as u32 + if ranges.len() > 0 { 1 } else { 0 });
+                    if end - 1 == CHAR_END as u32 { break; }
+                    ranges.push(ClassUnicodeRange::new(char::try_from(begin).unwrap(), char::try_from(end).unwrap()));
+                    min = end + 1;
+                }
+                Hir::class(Class::Unicode(ClassUnicode::new(ranges)))
+            }
+            2 => {
+                let kind = match rng.gen_range(0..4) {
+                    0 => RepetitionKind::ZeroOrOne,
+                    1 => RepetitionKind::ZeroOrMore,
+                    2 => RepetitionKind::OneOrMore,
+                    3 => {
+                        let range = match rng.gen_range(0..3) {
+                            0 => RepetitionRange::Exactly(rng.gen_range(2..10)),
+                            1 => RepetitionRange::AtLeast(rng.gen_range(0..10)),
+                            2 => {
+                                let m = rng.gen_range(0..10);
+                                RepetitionRange::Bounded(m, rng.gen_range(m..=10))
+                            }
+                            _ => unreachable!()
+                        };
+                        RepetitionKind::Range(range)
+                    }
+                    _ => unreachable!()
+                };
+                Hir::repetition(Repetition {
+                    kind,
+                    greedy: false,
+                    hir: Box::new(random_hir(rng)),
+                })
+            }
+            3 => {
+                let mut vec = Vec::new();
+                for _ in 0..rng.gen_range(1..=3) {
+                    vec.push(random_hir(rng));
+                }
+                Hir::concat(vec)
+            }
+            4 => {
+                let mut vec = Vec::new();
+                for _ in 0..rng.gen_range(1..=3) {
+                    vec.push(random_hir(rng));
+                }
+                Hir::alternation(vec)
+            }
+            _ => unreachable!()
         }
-        println!("begin: {}, end: {:?})", index.1, index.2);
-        println!("NFA:\n{:?}", &index);
-        let (dfa, warnings): (TokenizerDFA, Vec<_>) = nfa.into();
-        let index = tokenizer_dfa_to_index(&dfa);
-        println!("DFA:\n(");
-        for (x, i) in index.0.iter().zip(0..) {
-            println!("\t{}: {:?}", i, x);
-        }
-        println!("begin: {}, end: {:?})", index.1, index.2);
-        let dfa = dfa.minify();
-        let index = tokenizer_dfa_to_index(&dfa);
-        println!("DFA:\n(");
-        for (x, i) in index.0.iter().zip(0..) {
-            println!("\t{}: {:?}", i, x);
-        }
-        println!("begin: {}, end: {:?})", index.1, index.2);
     }
 }

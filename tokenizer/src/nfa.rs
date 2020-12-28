@@ -20,7 +20,7 @@ use std::sync::Weak;
 use regex_syntax::hir::{Class, Hir, HirKind, Literal, RepetitionKind, RepetitionRange};
 
 use crate::CharRange;
-use crate::dfa::TokenizerDFANode;
+
 
 #[derive(Debug, Clone)]
 pub(crate) struct TokenizerNFANodeRef<'a>(*const TokenizerNFANode<'a>, PhantomData<&'a ()>);
@@ -586,7 +586,6 @@ mod tests {
                 map[&Arc::as_ptr(&nfa.end)]
             )
         }
-        println!("{:?}", regex_syntax::Parser::new().parse("[ac]"));
         assert_eq!(to_index(&NFA::try_from(Hir::empty()).unwrap()), (vec![(seq![0], seq![(CharRange{range:'\u{0}' as u32..'\u{10ffff}' as u32 + 1},seq![0])])], 0, 0));
         assert_eq!(to_index(&NFA::try_from(Hir::literal(Literal::Unicode('a'))).unwrap()), (vec![(seq![], seq![(CharRange{range: 'a' as u32..'a' as u32 + 1},seq![1])]), (seq![], seq![])], 0, 1));
         assert_eq!(to_index(&NFA::try_from(Hir::class(Class::Unicode(ClassUnicode::new(vec![ClassUnicodeRange::new('a', 'c'), ClassUnicodeRange::new('0', '3')])))).unwrap()), (vec![(seq![], seq![(CharRange{range: 'a' as u32..'c' as u32 + 1},seq![1]), (CharRange{range: '0' as u32..'3' as u32 + 1},seq![1])]), (seq![], seq![])], 0, 1));
