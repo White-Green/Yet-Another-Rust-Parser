@@ -6,28 +6,10 @@ use std::convert::TryFrom;
 
 mod nfa;
 mod dfa;
+mod tokenizer;
 
-#[cfg(test)]
-mod tests {
-    use crate::CharRange;
-
-    #[test]
-    fn char_range() {
-        assert_eq!((CharRange { range: 0..2 }), (CharRange { range: 0..2 }));
-        assert_eq!((CharRange { range: 0..2 }), (CharRange { range: 0..2 }));
-        assert_eq!((CharRange { range: 0..2 }), (CharRange { range: 0..3 }));
-        assert_eq!((CharRange { range: 0..3 }), (CharRange { range: 0..2 }));
-        assert_ne!((CharRange { range: 0..2 }), (CharRange { range: 1..2 }));
-        assert_ne!((CharRange { range: 1..2 }), (CharRange { range: 0..2 }));
-        assert_ne!((CharRange { range: 0..2 }), (CharRange { range: 1..2 }));
-        assert_ne!((CharRange { range: 1..2 }), (CharRange { range: 0..2 }));
-
-        assert!((CharRange { range: 0..2 }) < (CharRange { range: 1..2 }));
-        assert!((CharRange { range: 1..2 }) > (CharRange { range: 0..2 }));
-        assert!((CharRange { range: 0..1 }) < (CharRange { range: 1..2 }));
-        assert!((CharRange { range: 1..2 }) > (CharRange { range: 0..1 }));
-    }
-}
+pub use crate::tokenizer::Tokenizer;
+pub use crate::tokenizer::iter::TokenizeIterator;
 
 #[derive(Eq, Hash, Clone)]
 struct CharRange {
@@ -63,5 +45,28 @@ impl PartialOrd for CharRange {
 impl Ord for CharRange {
     fn cmp(&self, other: &Self) -> Ordering {
         self.range.start.cmp(&other.range.start)
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use crate::CharRange;
+
+    #[test]
+    fn char_range() {
+        assert_eq!((CharRange { range: 0..2 }), (CharRange { range: 0..2 }));
+        assert_eq!((CharRange { range: 0..2 }), (CharRange { range: 0..2 }));
+        assert_eq!((CharRange { range: 0..2 }), (CharRange { range: 0..3 }));
+        assert_eq!((CharRange { range: 0..3 }), (CharRange { range: 0..2 }));
+        assert_ne!((CharRange { range: 0..2 }), (CharRange { range: 1..2 }));
+        assert_ne!((CharRange { range: 1..2 }), (CharRange { range: 0..2 }));
+        assert_ne!((CharRange { range: 0..2 }), (CharRange { range: 1..2 }));
+        assert_ne!((CharRange { range: 1..2 }), (CharRange { range: 0..2 }));
+
+        assert!((CharRange { range: 0..2 }) < (CharRange { range: 1..2 }));
+        assert!((CharRange { range: 1..2 }) > (CharRange { range: 0..2 }));
+        assert!((CharRange { range: 0..1 }) < (CharRange { range: 1..2 }));
+        assert!((CharRange { range: 1..2 }) > (CharRange { range: 0..1 }));
     }
 }
