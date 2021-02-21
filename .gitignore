@@ -1,6 +1,7 @@
 /*
 !/.gitignore
 !/tokenizer
+!/parser
 !/Cargo.toml
 !/README.md
 !/LICENSE
