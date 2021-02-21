@@ -110,10 +110,6 @@ impl<'a> TokenizerNFA<'a> {
     pub(crate) fn end(&self) -> &Vec<TokenizerNFANodeRef<'a>> {
         &self.end
     }
-
-    pub(crate) fn node(&self) -> Vec<TokenizerNFANodeRef<'a>> {
-        self.node.iter().map(|n| n.reference()).collect()
-    }
 }
 
 #[derive(Debug, PartialEq, Clone)]

@@ -1,7 +1,8 @@
-use crate::tokenizer::Tokenizer;
 use std::collections::VecDeque;
 use std::iter::FusedIterator;
 use std::ops::Deref;
+
+use crate::tokenizer::Tokenizer;
 
 pub struct TokenizeIterator<'a, I: Iterator<Item=char> + FusedIterator, E> {
     iter: I,
@@ -62,7 +63,6 @@ impl<'a, I: Iterator<Item=char> + FusedIterator, E> Iterator for TokenizeIterato
 mod tests {
     use crate::tokenizer::iter::Tokenize;
     use crate::tokenizer::Tokenizer;
-    use crate::dfa::{print_tokenizer_dfa_index, tokenizer_dfa_to_index};
 
     #[test]
     fn tokenize_iterator() {

@@ -1,7 +1,8 @@
-use crate::dfa::{TokenizerDFA, DFAConstructWarning};
-use crate::nfa::{TokenizerNFA, NFAConstructError, NFARegexConstructError};
 use std::convert::TryFrom;
 use std::ops::Deref;
+
+use crate::dfa::{DFAConstructWarning, TokenizerDFA};
+use crate::nfa::{NFARegexConstructError, TokenizerNFA};
 
 pub(crate) mod iter;
 
@@ -47,7 +48,7 @@ impl<E> TokenizerBuilder<E> {
     pub fn build<'a>(self) -> Result<(Tokenizer<'a, E>, Vec<TokenizerBuildWarning>), TokenizerBuildError> {
         let (regex, functions): (Vec<_>, Vec<_>) = self.patterns.into_iter().unzip();
         let nfa = TokenizerNFA::try_from(regex.iter().map(|s| s.deref()).collect::<Vec<&str>>()).map_err(|e| TokenizerBuildError::NFAConstructError(e))?;
-        let (dfa, mut warnings) = nfa.into();
+        let (dfa, warnings) = nfa.into();
         let dfa = dfa.minify();
         Ok((Tokenizer::new(dfa, functions), warnings.into_iter().map(|i| TokenizerBuildWarning::DFAConstructWarning(i)).collect()))
     }

@@ -8,7 +8,6 @@ use std::pin::Pin;
 
 use crate::CharRange;
 use crate::nfa::{TokenizerNFA, TokenizerNFANodeRef};
-use std::convert::TryFrom;
 
 #[derive(Debug, Clone)]
 pub(crate) struct TokenizerDFANodeRef<'a>(*const TokenizerDFANode<'a>, PhantomData<&'a ()>);
@@ -299,7 +298,9 @@ pub(crate) fn tokenizer_dfa_to_index(dfa: &TokenizerDFA) -> (Vec<BTreeMap<CharRa
 }
 
 #[cfg(test)]
+#[allow(dead_code)]
 pub(crate) fn print_tokenizer_dfa_index(index: &(Vec<BTreeMap<CharRange, usize>>, usize, BTreeMap<usize, usize>)) {
+    use std::convert::TryFrom;
     println!("digraph Automaton{{");
     for i in 0..index.0.len() {
         let option = if i == index.1 { "color=red, " } else { "" };
@@ -325,8 +326,8 @@ mod tests {
     use regex_syntax::hir::{Class, ClassUnicode, ClassUnicodeRange, Hir, Literal, Repetition, RepetitionKind, RepetitionRange};
 
     use crate::CharRange;
-    use crate::dfa::{DFAConstructWarning, tokenizer_dfa_to_index, TokenizerDFA, print_tokenizer_dfa_index};
-    use crate::nfa::{tokenizer_nfa_to_index, TokenizerNFA};
+    use crate::dfa::{DFAConstructWarning, tokenizer_dfa_to_index, TokenizerDFA};
+    use crate::nfa::TokenizerNFA;
 
     fn tokenizer_dfa_index_isomorphisms(a: &(Vec<BTreeMap<CharRange, usize>>, usize, BTreeMap<usize, usize>), b: &(Vec<BTreeMap<CharRange, usize>>, usize, BTreeMap<usize, usize>)) -> bool {
         if a.0.len() != b.0.len() { return false; }
@@ -530,6 +531,7 @@ mod tests {
         // }
     }
 
+    #[allow(dead_code)]
     fn random_hir(rng: &mut ThreadRng) -> Hir {
         const CHAR_BEGIN: char = '0';
         const CHAR_END: char = '9';
