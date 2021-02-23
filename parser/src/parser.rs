@@ -30,8 +30,26 @@ impl<N: NumberMapped, T> Hash for LR1Item<N, T> {
     }
 }
 
+fn calc_goto<N: NumberMapped, T>(set: &HashSet<LR1Item<N, T>>, syntax: &Syntax<N, T>, null: &HashSet<Symbol<usize, TerminalSymbol<T>>>, first: &HashMap<Symbol<usize, TerminalSymbol<T>>, HashSet<TerminalSymbol<T>>>) -> HashMap<TerminalSymbol<T>, HashSet<LR1Item<N, T>>> {
+    let mut goto = HashMap::new();
+    for item in set {
+        if let Some(Symbol::Terminal(symbol)) = item.rule.symbols.get(item.position) {
+            goto.entry(symbol.clone())
+                .or_insert_with(|| HashSet::new())
+                .insert(LR1Item {
+                    rule: item.rule.clone(),
+                    position: item.position + 1,
+                    lookahead_symbol: item.lookahead_symbol.clone(),
+                });
+        }
+    }
+    for (_, set) in &mut goto {
+        calc_closure(set, syntax, null, first);
+    }
+    goto
+}
 
-fn calc_closure<N: NumberMapped, T>(mut set: HashSet<LR1Item<N, T>>, syntax: &Syntax<N, T>, null: &HashSet<Symbol<usize, TerminalSymbol<T>>>, first: &HashMap<Symbol<usize, TerminalSymbol<T>>, HashSet<TerminalSymbol<T>>>) -> HashSet<LR1Item<N, T>> {
+fn calc_closure<N: NumberMapped, T>(set: &mut HashSet<LR1Item<N, T>>, syntax: &Syntax<N, T>, null: &HashSet<Symbol<usize, TerminalSymbol<T>>>, first: &HashMap<Symbol<usize, TerminalSymbol<T>>, HashSet<TerminalSymbol<T>>>) {
     let mut rules = HashMap::new();
     for rule in &syntax.rules {
         rules.entry(rule.non_terminal)
@@ -40,7 +58,7 @@ fn calc_closure<N: NumberMapped, T>(mut set: HashSet<LR1Item<N, T>>, syntax: &Sy
     }
     loop {
         let mut update = HashSet::new();
-        for item in &set {
+        for item in set.iter() {
             let non_terminal = if let Some(Symbol::NonTerminal(non_terminal)) = item.rule.symbols.get(item.position) {
                 *non_terminal
             } else {
@@ -64,7 +82,6 @@ fn calc_closure<N: NumberMapped, T>(mut set: HashSet<LR1Item<N, T>>, syntax: &Sy
         }
         if !updated { break; }
     }
-    set
 }
 
 fn get_first<'a, T: 'a>(string: impl Iterator<Item=&'a Symbol<usize, TerminalSymbol<T>>>, null: &HashSet<Symbol<usize, TerminalSymbol<T>>>, first: &HashMap<Symbol<usize, TerminalSymbol<T>>, HashSet<TerminalSymbol<T>>>) -> HashSet<TerminalSymbol<T>> {
@@ -149,7 +166,7 @@ mod tests {
     use std::rc::Rc;
 
     use crate::{NumberMapped, Rule, Symbol, Syntax};
-    use crate::parser::{calc_closure, calc_first, calc_null, LR1Item};
+    use crate::parser::{calc_closure, calc_first, calc_goto, calc_null, LR1Item};
     use crate::syntax::TerminalSymbol;
 
     #[test]
@@ -257,11 +274,12 @@ mod tests {
             .rule(Rule::new(E::C));
         let null = calc_null(&syntax);
         let first = calc_first(&syntax, &null);
-        let closure = calc_closure(vec![LR1Item {
+        let mut closure = vec![LR1Item {
             rule: syntax.rules[0].clone(),
             position: 0,
             lookahead_symbol: TerminalSymbol::EOI,
-        }].into_iter().collect(), &syntax, &null, &first);
+        }].into_iter().collect();
+        calc_closure(&mut closure, &syntax, &null, &first);
         assert_eq!(closure, vec![
             LR1Item {
                 rule: syntax.rules[0].clone(),
@@ -338,6 +356,73 @@ mod tests {
                 position: 0,
                 lookahead_symbol: TerminalSymbol::Symbol(Rc::clone(&term2)),
             },
+        ].into_iter().collect());
+    }
+
+    #[test]
+    fn goto() {
+        #[derive(Debug, PartialEq)]
+        enum E { A, B, C }
+        impl NumberMapped for E {
+            fn get_number(&self) -> usize {
+                match self {
+                    E::A => 0,
+                    E::B => 1,
+                    E::C => 2,
+                }
+            }
+
+            fn default_from_number(number: usize) -> Option<Self> {
+                match number {
+                    0 => Some(E::A),
+                    1 => Some(E::B),
+                    2 => Some(E::C),
+                    _ => None
+                }
+            }
+        }
+        let term0 = Rc::new(|v: &i32| *v == 0) as Rc<dyn Fn(&i32) -> bool>;
+        let term1 = Rc::new(|v: &i32| *v == 1) as Rc<dyn Fn(&i32) -> bool>;
+        let term2 = Rc::new(|v: &i32| *v == 2) as Rc<dyn Fn(&i32) -> bool>;
+        let syntax = Syntax::new()
+            .rule(Rule::new(E::A).non_terminal(E::B).non_terminal(E::C).terminal_rc(Rc::clone(&term0)))
+            .rule(Rule::new(E::A).non_terminal(E::C).terminal_rc(Rc::clone(&term1)))
+            .rule(Rule::new(E::B).non_terminal(E::C))
+            .rule(Rule::new(E::B).non_terminal(E::A))
+            .rule(Rule::new(E::C).terminal_rc(Rc::clone(&term2)))
+            .rule(Rule::new(E::C));
+        let null = calc_null(&syntax);
+        let first = calc_first(&syntax, &null);
+        let closure = {
+            let mut closure = vec![LR1Item {
+                rule: syntax.rules[0].clone(),
+                position: 0,
+                lookahead_symbol: TerminalSymbol::EOI,
+            }].into_iter().collect();
+            calc_closure(&mut closure, &syntax, &null, &first);
+            closure
+        };
+        let goto = calc_goto(&closure, &syntax, &null, &first);
+        assert_eq!(goto, vec![
+            (TerminalSymbol::Symbol(Rc::clone(&term2)),
+             vec![
+                 LR1Item {
+                     rule: syntax.rules[4].clone(),
+                     position: 1,
+                     lookahead_symbol: TerminalSymbol::Symbol(Rc::clone(&term0)),
+                 },
+                 LR1Item {
+                     rule: syntax.rules[4].clone(),
+                     position: 1,
+                     lookahead_symbol: TerminalSymbol::Symbol(Rc::clone(&term1)),
+                 },
+                 LR1Item {
+                     rule: syntax.rules[4].clone(),
+                     position: 1,
+                     lookahead_symbol: TerminalSymbol::Symbol(Rc::clone(&term2)),
+                 },
+             ].into_iter().collect()
+            )
         ].into_iter().collect());
     }
 }
