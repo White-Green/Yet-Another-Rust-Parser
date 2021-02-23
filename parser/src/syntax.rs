@@ -24,38 +24,80 @@ impl<N: NumberMapped, T> Syntax<N, T> {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Hash)]
+#[derive(Debug)]
 pub struct Rule<N: NumberMapped, T> {
     pub(crate) non_terminal: usize,
-    pub(crate) symbols: Vec<Symbol<usize, TerminalSymbolFunc<T>>>,
+    pub(crate) symbols: Vec<Symbol<usize, TerminalSymbol<T>>>,
     phantom: PhantomData<N>,
 }
 
-pub(crate) struct TerminalSymbolFunc<T>(pub(crate) Rc<dyn Fn(&T) -> bool>);
-
-impl<T> Debug for TerminalSymbolFunc<T> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        f.debug_tuple("TerminalSymbolFunc").field(&Rc::as_ptr(&self.0)).finish()
-    }
-}
-
-impl<T> Clone for TerminalSymbolFunc<T> {
+impl<N: NumberMapped, T> Clone for Rule<N, T> {
     fn clone(&self) -> Self {
-        Self(Rc::clone(&self.0))
+        Rule {
+            non_terminal: self.non_terminal.clone(),
+            symbols: self.symbols.clone(),
+            phantom: Default::default(),
+        }
     }
 }
 
-impl<T> PartialEq for TerminalSymbolFunc<T> {
+impl<N: NumberMapped, T> PartialEq for Rule<N, T> {
     fn eq(&self, other: &Self) -> bool {
-        Rc::ptr_eq(&self.0, &other.0)
+        self.non_terminal == other.non_terminal &&
+            self.symbols == other.symbols
     }
 }
 
-impl<T> Eq for TerminalSymbolFunc<T> {}
+impl<N: NumberMapped, T> Eq for Rule<N, T> {}
 
-impl<T> Hash for TerminalSymbolFunc<T> {
+impl<N: NumberMapped, T> Hash for Rule<N, T> {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        Rc::as_ptr(&self.0).hash(state)
+        self.non_terminal.hash(state);
+        self.symbols.hash(state);
+    }
+}
+
+pub(crate) enum TerminalSymbol<T> {
+    Symbol(Rc<dyn Fn(&T) -> bool>),
+    EOI,
+}
+
+impl<T> Debug for TerminalSymbol<T> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            TerminalSymbol::Symbol(func) => f.debug_tuple("TerminalSymbol").field(&Rc::as_ptr(func)).finish(),
+            TerminalSymbol::EOI => f.debug_tuple("EOI").finish()
+        }
+    }
+}
+
+impl<T> Clone for TerminalSymbol<T> {
+    fn clone(&self) -> Self {
+        match self {
+            TerminalSymbol::Symbol(f) => TerminalSymbol::Symbol(Rc::clone(f)),
+            TerminalSymbol::EOI => TerminalSymbol::EOI
+        }
+    }
+}
+
+impl<T> PartialEq for TerminalSymbol<T> {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (TerminalSymbol::Symbol(f1), TerminalSymbol::Symbol(f2)) => Rc::ptr_eq(f1, f2),
+            (TerminalSymbol::EOI, TerminalSymbol::EOI) => true,
+            _ => false,
+        }
+    }
+}
+
+impl<T> Eq for TerminalSymbol<T> {}
+
+impl<T> Hash for TerminalSymbol<T> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        match self {
+            TerminalSymbol::Symbol(f) => Rc::as_ptr(f).hash(state),
+            TerminalSymbol::EOI => 0usize.hash(state),
+        }
     }
 }
 
@@ -70,12 +112,12 @@ impl<N: NumberMapped, T> Rule<N, T> {
     }
 
     pub fn terminal<F: Fn(&T) -> bool + 'static>(mut self, f: F) -> Self {
-        self.symbols.push(Symbol::Terminal(TerminalSymbolFunc(Rc::new(f) as Rc<dyn Fn(&T) -> bool>)));
+        self.symbols.push(Symbol::Terminal(TerminalSymbol::Symbol(Rc::new(f) as Rc<dyn Fn(&T) -> bool>)));
         self
     }
 
     pub fn terminal_rc(mut self, f: Rc<dyn Fn(&T) -> bool>) -> Self {
-        self.symbols.push(Symbol::Terminal(TerminalSymbolFunc(f)));
+        self.symbols.push(Symbol::Terminal(TerminalSymbol::Symbol(f)));
         self
     }
 }
@@ -85,7 +127,7 @@ mod tests {
     use std::rc::Rc;
 
     use crate::{NumberMapped, Symbol};
-    use crate::syntax::{Rule, Syntax, TerminalSymbolFunc};
+    use crate::syntax::{Rule, Syntax, TerminalSymbol};
 
     #[test]
     fn syntax() {
@@ -122,12 +164,12 @@ mod tests {
                        rules: vec![
                            Rule {
                                non_terminal: 0,
-                               symbols: vec![Symbol::NonTerminal(1), Symbol::NonTerminal(2), Symbol::Terminal(TerminalSymbolFunc(term0))],
+                               symbols: vec![Symbol::NonTerminal(1), Symbol::NonTerminal(2), Symbol::Terminal(TerminalSymbol::Symbol(term0))],
                                phantom: Default::default(),
                            },
                            Rule {
                                non_terminal: 0,
-                               symbols: vec![Symbol::NonTerminal(2), Symbol::Terminal(TerminalSymbolFunc(term1))],
+                               symbols: vec![Symbol::NonTerminal(2), Symbol::Terminal(TerminalSymbol::Symbol(term1))],
                                phantom: Default::default(),
                            },
                            Rule {
@@ -137,7 +179,7 @@ mod tests {
                            },
                            Rule {
                                non_terminal: 2,
-                               symbols: vec![Symbol::Terminal(TerminalSymbolFunc(term2))],
+                               symbols: vec![Symbol::Terminal(TerminalSymbol::Symbol(term2))],
                                phantom: Default::default(),
                            },
                        ]
