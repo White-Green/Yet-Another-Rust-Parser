@@ -1,5 +1,6 @@
 use core::fmt;
 use std::fmt::{Debug, Formatter};
+use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;
 use std::rc::Rc;
 
@@ -7,7 +8,7 @@ use crate::{NumberMapped, Symbol};
 
 #[derive(Debug, PartialEq, Default)]
 pub struct Syntax<N: NumberMapped, T> {
-    rules: Vec<Rule<N, T>>,
+    pub(crate) rules: Vec<Rule<N, T>>,
 }
 
 impl<N: NumberMapped, T> Syntax<N, T> {
@@ -23,14 +24,14 @@ impl<N: NumberMapped, T> Syntax<N, T> {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct Rule<N: NumberMapped, T> {
-    non_terminal: usize,
-    symbols: Vec<Symbol<usize, TerminalSymbolFunc<T>>>,
+    pub(crate) non_terminal: usize,
+    pub(crate) symbols: Vec<Symbol<usize, TerminalSymbolFunc<T>>>,
     phantom: PhantomData<N>,
 }
 
-struct TerminalSymbolFunc<T>(Rc<dyn Fn(&T) -> bool>);
+pub(crate) struct TerminalSymbolFunc<T>(pub(crate) Rc<dyn Fn(&T) -> bool>);
 
 impl<T> Debug for TerminalSymbolFunc<T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
@@ -38,9 +39,23 @@ impl<T> Debug for TerminalSymbolFunc<T> {
     }
 }
 
+impl<T> Clone for TerminalSymbolFunc<T> {
+    fn clone(&self) -> Self {
+        Self(Rc::clone(&self.0))
+    }
+}
+
 impl<T> PartialEq for TerminalSymbolFunc<T> {
     fn eq(&self, other: &Self) -> bool {
         Rc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl<T> Eq for TerminalSymbolFunc<T> {}
+
+impl<T> Hash for TerminalSymbolFunc<T> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        Rc::as_ptr(&self.0).hash(state)
     }
 }
 
@@ -73,7 +88,7 @@ mod tests {
     use crate::syntax::{Rule, Syntax, TerminalSymbolFunc};
 
     #[test]
-    fn test_syntax() {
+    fn syntax() {
         #[derive(Debug, PartialEq)]
         enum E { A, B, C }
         impl NumberMapped for E {

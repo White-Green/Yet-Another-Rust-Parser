@@ -5,7 +5,7 @@ pub use crate::syntax::{Rule, Syntax};
 mod parser;
 mod syntax;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum Symbol<N, T> {
     NonTerminal(N),
     Terminal(T),
