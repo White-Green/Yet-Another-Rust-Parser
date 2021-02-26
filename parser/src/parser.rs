@@ -70,7 +70,7 @@ impl<N, T> Hash for LR1Item<N, T> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq)]
 enum Action<State, Rule> {
     Shift(State),
     Reduce(Rule),
@@ -145,8 +145,12 @@ fn calc_closure<N, T>(set: &mut StateInterop<N, T>, syntax: &Syntax<N, T>, null:
 fn get_first<'a>(string: impl Iterator<Item=&'a SymbolInterop>, null: &NullSetInterop, first: &FirstSetInterop) -> BTreeSet<TerminalSymbolInterop> {
     let mut result = BTreeSet::new();
     for symbol in string {
-        for symbol in first.get(symbol).map(|set| set.iter()).into_iter().flatten() {
+        if let Symbol::Terminal(symbol) = symbol {
             result.insert(symbol.clone());
+        } else {
+            for symbol in first.get(symbol).map(|set| set.iter()).into_iter().flatten().cloned() {
+                result.insert(symbol);
+            }
         }
         if !null.contains(symbol) { break; }
     }
@@ -261,9 +265,11 @@ fn calc_all_goto<N, T>(syntax: &Syntax<N, T>, start_state: StateInterop<N, T>, n
     state_list
 }
 
+#[derive(Debug, Clone, PartialEq)]
 struct Parser<N, T> {
     pub(crate) action_table: HashMap<usize, HashMap<TerminalSymbol<usize>, Action<usize, Rule<N, T>>>>,
     pub(crate) goto_table: HashMap<usize, HashMap<usize, usize>>,
+    pub(crate) start: usize,
 }
 
 impl<N: EnumIndex, T: EnumIndex> Parser<N, T> {
@@ -286,7 +292,7 @@ impl<N: EnumIndex, T: EnumIndex> Parser<N, T> {
         let first = calc_first(&syntax, &null);
         let mut start_state = vec![LR1Item { rule: start_rule.clone(), position: 0, lookahead_symbol: TerminalSymbol::EOI }].into_iter().collect();
         calc_closure(&mut start_state, &syntax, &null, &first);
-        let state_list = calc_all_goto(&syntax, start_state, &null, &first);
+        let state_list = calc_all_goto(&syntax, start_state.clone(), &null, &first);
 
         let mut state_index = HashMap::new();
         let mut i = 0usize;
@@ -329,7 +335,7 @@ impl<N: EnumIndex, T: EnumIndex> Parser<N, T> {
             .collect();
         action_table.shrink_to_fit();
         goto_table.shrink_to_fit();
-        (Parser { action_table, goto_table }, warnings)
+        (Parser { action_table, goto_table, start: *state_index.get(&start_state).unwrap() }, warnings)
     }
 }
 
@@ -341,8 +347,11 @@ impl<N: EnumIndex, T: EnumIndex> From<Syntax<N, T>> for Parser<N, T> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::{HashMap, HashSet, VecDeque};
+    use std::fmt::Debug;
+
     use crate::{EnumIndex, Rule, Symbol, Syntax};
-    use crate::parser::{calc_closure, calc_first, calc_goto, calc_null, LR1Item};
+    use crate::parser::{Action, calc_closure, calc_first, calc_goto, calc_null, LR1Item, Parser};
     use crate::syntax::TerminalSymbol;
 
     #[test]
@@ -384,6 +393,117 @@ mod tests {
 
     #[test]
     fn closure() {
+        #[derive(EnumIndex, Debug)]
+        enum NonTerminal { E, T, F }
+        #[derive(EnumIndex, Debug)]
+        enum Terminal { Plus, Star, Bracket, CloseBracket, I }
+        use NonTerminal::*;
+        use Terminal::*;
+        let mut syntax = Syntax::builder()
+            .rule(Rule::new(E).non_terminal(E).terminal(Plus).non_terminal(T))
+            .rule(Rule::new(E).non_terminal(T))
+            .rule(Rule::new(T).non_terminal(T).terminal(Star).non_terminal(F))
+            .rule(Rule::new(T).non_terminal(F))
+            .rule(Rule::new(F).terminal(Bracket).non_terminal(E).terminal(CloseBracket))
+            .rule(Rule::new(F).terminal(I))
+            .build(E);
+        let start_rule = Rule::new_raw(3).non_terminal(E);
+        syntax.rules.push(start_rule.clone());
+        let mut start_state = vec![LR1Item {
+            rule: start_rule.clone(),
+            position: 0,
+            lookahead_symbol: TerminalSymbol::EOI,
+        }].into_iter().collect();
+        let null = calc_null(&syntax);
+        let first = calc_first(&syntax, &null);
+        calc_closure(&mut start_state, &syntax, &null, &first);
+        assert_eq!(start_state, vec![
+            LR1Item {
+                rule: start_rule.clone(),
+                position: 0,
+                lookahead_symbol: TerminalSymbol::EOI,
+            },
+            LR1Item {
+                rule: syntax.rules[0].clone(),
+                position: 0,
+                lookahead_symbol: TerminalSymbol::EOI,
+            },
+            LR1Item {
+                rule: syntax.rules[0].clone(),
+                position: 0,
+                lookahead_symbol: TerminalSymbol::Symbol(Plus.enum_index()),
+            },
+            LR1Item {
+                rule: syntax.rules[1].clone(),
+                position: 0,
+                lookahead_symbol: TerminalSymbol::EOI,
+            },
+            LR1Item {
+                rule: syntax.rules[1].clone(),
+                position: 0,
+                lookahead_symbol: TerminalSymbol::Symbol(Plus.enum_index()),
+            },
+            LR1Item {
+                rule: syntax.rules[2].clone(),
+                position: 0,
+                lookahead_symbol: TerminalSymbol::EOI,
+            },
+            LR1Item {
+                rule: syntax.rules[2].clone(),
+                position: 0,
+                lookahead_symbol: TerminalSymbol::Symbol(Plus.enum_index()),
+            },
+            LR1Item {
+                rule: syntax.rules[2].clone(),
+                position: 0,
+                lookahead_symbol: TerminalSymbol::Symbol(Star.enum_index()),
+            },
+            LR1Item {
+                rule: syntax.rules[3].clone(),
+                position: 0,
+                lookahead_symbol: TerminalSymbol::EOI,
+            },
+            LR1Item {
+                rule: syntax.rules[3].clone(),
+                position: 0,
+                lookahead_symbol: TerminalSymbol::Symbol(Plus.enum_index()),
+            },
+            LR1Item {
+                rule: syntax.rules[3].clone(),
+                position: 0,
+                lookahead_symbol: TerminalSymbol::Symbol(Star.enum_index()),
+            },
+            LR1Item {
+                rule: syntax.rules[4].clone(),
+                position: 0,
+                lookahead_symbol: TerminalSymbol::EOI,
+            },
+            LR1Item {
+                rule: syntax.rules[4].clone(),
+                position: 0,
+                lookahead_symbol: TerminalSymbol::Symbol(Plus.enum_index()),
+            },
+            LR1Item {
+                rule: syntax.rules[4].clone(),
+                position: 0,
+                lookahead_symbol: TerminalSymbol::Symbol(Star.enum_index()),
+            },
+            LR1Item {
+                rule: syntax.rules[5].clone(),
+                position: 0,
+                lookahead_symbol: TerminalSymbol::EOI,
+            },
+            LR1Item {
+                rule: syntax.rules[5].clone(),
+                position: 0,
+                lookahead_symbol: TerminalSymbol::Symbol(Plus.enum_index()),
+            },
+            LR1Item {
+                rule: syntax.rules[5].clone(),
+                position: 0,
+                lookahead_symbol: TerminalSymbol::Symbol(Star.enum_index()),
+            },
+        ].into_iter().collect());
         #[derive(Debug, PartialEq, EnumIndex)]
         enum N { A, B, C }
         #[derive(Debug, PartialEq, EnumIndex)]
@@ -594,5 +714,366 @@ mod tests {
                  },
              ].into_iter().collect())
         ].into_iter().collect());
+    }
+
+    fn parser_isomorphisms<N, T>(parser_a: &Parser<N, T>, parser_b: &Parser<N, T>) -> bool {
+        let mut map = HashMap::new();
+        map.insert(parser_a.start, parser_b.start);
+        let mut q = VecDeque::new();
+        q.push_back(parser_a.start);
+        while let Some(state) = q.pop_front() {
+            let a = parser_a.action_table.get(&state).unwrap();
+            let b = if let Some(b) = parser_b.action_table.get(map.get(&state).unwrap()) { b } else { return false; };
+            for (symbol, action_a) in a {
+                let action_b = if let Some(action) = b.get(symbol) { action } else { return false; };
+                match (action_a, action_b) {
+                    (Action::Shift(shift_a), Action::Shift(shift_b)) if !map.contains_key(shift_a) => {
+                        map.insert(*shift_a, *shift_b);
+                        q.push_back(*shift_a);
+                    }
+                    (Action::Shift(shift_a), Action::Shift(shift_b)) if map.get(shift_a).unwrap() == shift_b => {}
+                    (Action::Reduce(rule_a), Action::Reduce(rule_b)) if rule_a == rule_b => {}
+                    (Action::Accept, Action::Accept) => {}
+                    _ => return false,
+                }
+            }
+            let (a, b) = match (parser_a.goto_table.get(&state), parser_b.goto_table.get(map.get(&state).unwrap())) {
+                (Some(a), Some(b)) => (a, b),
+                (None, None) => continue,
+                _ => return false,
+            };
+            for (symbol, goto_a) in a {
+                let goto_b = if let Some(goto) = b.get(symbol) { goto } else { return false; };
+                if !map.contains_key(goto_a) {
+                    map.insert(*goto_a, *goto_b);
+                    q.push_back(*goto_a);
+                }
+                if map.get(goto_a) != Some(goto_b) { return false; }
+            }
+        }
+        q.push_back(parser_a.start);
+        let mut set = HashSet::new();
+        while let Some(state) = q.pop_front() {
+            if set.contains(&state) { continue; }
+            set.insert(state);
+            let a = parser_a.action_table.get(&state).unwrap();
+            let b = parser_b.action_table.get(map.get(&state).unwrap()).unwrap();
+            for (symbol, action_a) in a {
+                let action_b = if let Some(action) = b.get(symbol) { action } else { return false; };
+                match (action_a, action_b) {
+                    (Action::Shift(shift_a), Action::Shift(shift_b)) if map.get(shift_a) == Some(shift_b) => {
+                        q.push_back(*shift_a);
+                    }
+                    (Action::Reduce(rule_a), Action::Reduce(rule_b)) if rule_a == rule_b => {}
+                    (Action::Accept, Action::Accept) => {}
+                    _ => return false,
+                }
+            }
+            let (a, b) = match (parser_a.goto_table.get(&state), parser_b.goto_table.get(map.get(&state).unwrap())) {
+                (Some(a), Some(b)) => (a, b),
+                (None, None) => continue,
+                _ => return false,
+            };
+            for (symbol, goto_a) in a {
+                if b.get(symbol) != Some(map.get(goto_a).unwrap()) { return false; }
+                q.push_back(*goto_a);
+            }
+        }
+        true
+    }
+
+    #[test]
+    fn construct_parser() {
+        #[derive(EnumIndex, Debug)]
+        enum NonTerminal { E, T, F }
+        #[derive(EnumIndex, Debug)]
+        enum Terminal { Plus, Star, Bracket, CloseBracket, I }
+        use NonTerminal::*;
+        use Terminal::*;
+        let syntax = Syntax::builder()
+            .rule(/* 0:E->E+T */Rule::new(E).non_terminal(E).terminal(Plus).non_terminal(T))
+            .rule(/* 1:E->T   */Rule::new(E).non_terminal(T))
+            .rule(/* 2:T->T*F */Rule::new(T).non_terminal(T).terminal(Star).non_terminal(F))
+            .rule(/* 3:T->F   */Rule::new(T).non_terminal(F))
+            .rule(/* 4:F->(E) */Rule::new(F).terminal(Bracket).non_terminal(E).terminal(CloseBracket))
+            .rule(/* 5:F->i   */Rule::new(F).terminal(I))
+            /*       6:E'->E  */
+            .build(E);
+        let expect = Parser {
+            action_table: vec![
+                // 0:closure([E'->.E,$])=[E'->.E,$],[E->.E+T,$+],[E->.T,$+],[T->.T*F,$+*],[T->.F,$+*],[F->.(E),$+*],[F->.i,$+*]
+                //      Action: (=>s4,i=>s5
+                //      Goto:   E=>1,T=>2,F=>3
+                (
+                    0,
+                    vec![
+                        (TerminalSymbol::Symbol(Bracket.enum_index()), Action::Shift(4)),
+                        (TerminalSymbol::Symbol(I.enum_index()), Action::Shift(5)),
+                    ].into_iter().collect()
+                ),
+                // 1:closure([E'->E.,$],[E->E.+T,$+])=[E'->E.,$],[E->E.+T,$+]
+                //      Action: +=>s6,$=>r6
+                (
+                    1,
+                    vec![
+                        (TerminalSymbol::Symbol(Plus.enum_index()), Action::Shift(6)),
+                        (TerminalSymbol::EOI, Action::Accept),
+                    ].into_iter().collect()
+                ),
+                // 2:closure([E->T.,$+],[T->T.*F,$+*])=[E->T.,$+],[T->T.*F,$+*]
+                //      Action: *=>s7,$+=>r1
+                (
+                    2,
+                    vec![
+                        (TerminalSymbol::Symbol(Star.enum_index()), Action::Shift(7)),
+                        (TerminalSymbol::EOI, Action::Reduce(syntax.rules[1].clone())),
+                        (TerminalSymbol::Symbol(Plus.enum_index()), Action::Reduce(syntax.rules[1].clone())),
+                    ].into_iter().collect()
+                ),
+                // 3:closure([T->F.,$+*])=[T->F.,$+*]
+                //      Action: $+*=>r3
+                (
+                    3,
+                    vec![
+                        (TerminalSymbol::EOI, Action::Reduce(syntax.rules[3].clone())),
+                        (TerminalSymbol::Symbol(Plus.enum_index()), Action::Reduce(syntax.rules[3].clone())),
+                        (TerminalSymbol::Symbol(Star.enum_index()), Action::Reduce(syntax.rules[3].clone())),
+                    ].into_iter().collect()
+                ),
+                // 4:closure([F->(.E),$+*])=[F->(.E),$+*],[E->.E+T,)+],[E->.T,)+],[T->.T*F,)+*],[T->.F,)+*],[F->.(E),)+*],[F->.i,)+*]
+                //      Action: (=>s12,i=>s13
+                //      Goto:   E=>8,T=>9,F=>10
+                (
+                    4,
+                    vec![
+                        (TerminalSymbol::Symbol(Bracket.enum_index()), Action::Shift(12)),
+                        (TerminalSymbol::Symbol(I.enum_index()), Action::Shift(13)),
+                    ].into_iter().collect()
+                ),
+                // 5:closure([F->i.,$+*])=[F->i.,$+*]
+                //      Action: $+*=>r5
+                (
+                    5,
+                    vec![
+                        (TerminalSymbol::EOI, Action::Reduce(syntax.rules[5].clone())),
+                        (TerminalSymbol::Symbol(Plus.enum_index()), Action::Reduce(syntax.rules[5].clone())),
+                        (TerminalSymbol::Symbol(Star.enum_index()), Action::Reduce(syntax.rules[5].clone())),
+                    ].into_iter().collect()
+                ),
+                // 6:closure([E->E+.T,$+])=[E->E+.T,$+],[T->.T*F,$+*],[T->.F,$+*],[F->.(E),$+*],[F->.i,$+*]
+                //      Action: (=>s4,i=>s5
+                //      Goto:   T=>14,F=>3
+                (
+                    6,
+                    vec![
+                        (TerminalSymbol::Symbol(Bracket.enum_index()), Action::Shift(4)),
+                        (TerminalSymbol::Symbol(I.enum_index()), Action::Shift(5)),
+                    ].into_iter().collect()
+                ),
+                // 7:closure([T->T*.F,$+*])=[T->T*.F,$+*],[F->.(E),$+*],[F->.i,$+*]
+                //      Action: (=>s4,i=>s5
+                //      Goto:   F=>15
+                (
+                    7,
+                    vec![
+                        (TerminalSymbol::Symbol(Bracket.enum_index()), Action::Shift(4)),
+                        (TerminalSymbol::Symbol(I.enum_index()), Action::Shift(5)),
+                    ].into_iter().collect()
+                ),
+                // 8:closure([F->(E.),$+*],[E->E.+T,)+])=[F->(E.),$+*],[E->E.+T,)+]
+                //      Action: )=>s16,+=>s11
+                (
+                    8,
+                    vec![
+                        (TerminalSymbol::Symbol(CloseBracket.enum_index()), Action::Shift(16)),
+                        (TerminalSymbol::Symbol(Plus.enum_index()), Action::Shift(11)),
+                    ].into_iter().collect()
+                ),
+                // 9:closure([E->T.,)+],[T->T.*F,)+*])=[E->T.,)+],[T->T.*F,)+*]
+                //      Action: *=>s17,)+=>r1
+                (
+                    9,
+                    vec![
+                        (TerminalSymbol::Symbol(CloseBracket.enum_index()), Action::Reduce(syntax.rules[1].clone())),
+                        (TerminalSymbol::Symbol(Plus.enum_index()), Action::Reduce(syntax.rules[1].clone())),
+                        (TerminalSymbol::Symbol(Star.enum_index()), Action::Shift(17)),
+                    ].into_iter().collect()
+                ),
+                //10:closure([T->F.,)+*])=[T->F.,)+*]
+                //      Action: )+*=>r3
+                (
+                    10,
+                    vec![
+                        (TerminalSymbol::Symbol(CloseBracket.enum_index()), Action::Reduce(syntax.rules[3].clone())),
+                        (TerminalSymbol::Symbol(Plus.enum_index()), Action::Reduce(syntax.rules[3].clone())),
+                        (TerminalSymbol::Symbol(Star.enum_index()), Action::Reduce(syntax.rules[3].clone())),
+                    ].into_iter().collect()
+                ),
+                //11:closure([E->E+.T,)+])=[E->E+.T,)+],[T->.T*F,)+*],[T->.F,)+*],[F->.(E),)+*],[F->.i,)+*]
+                //      Action: (=>s12,i=>s13
+                //      Goto:   T=>18,F=>10
+                (
+                    11,
+                    vec![
+                        (TerminalSymbol::Symbol(Bracket.enum_index()), Action::Shift(12)),
+                        (TerminalSymbol::Symbol(I.enum_index()), Action::Shift(13)),
+                    ].into_iter().collect()
+                ),
+                //12:closure([F->(.E),)+*])=[F->(.E),)+*],[E->.E+T,)+],[E->.T,)+],[T->.T*F,)+*],[T->.F,)+*],[F->.(E),)+*],[F->.i,)+*]
+                //      Action: (=>s12,i=>s13
+                //      Goto:   E=>19,T=>9,F=>10
+                (
+                    12,
+                    vec![
+                        (TerminalSymbol::Symbol(Bracket.enum_index()), Action::Shift(12)),
+                        (TerminalSymbol::Symbol(I.enum_index()), Action::Shift(13)),
+                    ].into_iter().collect()
+                ),
+                //13:closure([F->i.,)+*])=[F->i.,)+*]
+                //      Action: )+*=>r5
+                (
+                    13,
+                    vec![
+                        (TerminalSymbol::Symbol(CloseBracket.enum_index()), Action::Reduce(syntax.rules[5].clone())),
+                        (TerminalSymbol::Symbol(Plus.enum_index()), Action::Reduce(syntax.rules[5].clone())),
+                        (TerminalSymbol::Symbol(Star.enum_index()), Action::Reduce(syntax.rules[5].clone())),
+                    ].into_iter().collect()
+                ),
+                //14:closure([E->E+T.,$+],[T->T.*F,$+*])=[E->E+T.,$+],[T->T.*F,$+*]
+                //      Action: *=>s7,$+=>r0
+                (
+                    14,
+                    vec![
+                        (TerminalSymbol::EOI, Action::Reduce(syntax.rules[0].clone())),
+                        (TerminalSymbol::Symbol(Plus.enum_index()), Action::Reduce(syntax.rules[0].clone())),
+                        (TerminalSymbol::Symbol(Star.enum_index()), Action::Shift(7)),
+                    ].into_iter().collect()
+                ),
+                //15:closure([T->T*F.,$+*])=[T->T*F.,$+*]
+                //      Action: $+*=>r2
+                (
+                    15,
+                    vec![
+                        (TerminalSymbol::EOI, Action::Reduce(syntax.rules[2].clone())),
+                        (TerminalSymbol::Symbol(Plus.enum_index()), Action::Reduce(syntax.rules[2].clone())),
+                        (TerminalSymbol::Symbol(Star.enum_index()), Action::Reduce(syntax.rules[2].clone())),
+                    ].into_iter().collect()
+                ),
+                //16:closure([F->(E).,$+*])=[F->(E).,$+*]
+                //      Action: $+*=>r4
+                (
+                    16,
+                    vec![
+                        (TerminalSymbol::EOI, Action::Reduce(syntax.rules[4].clone())),
+                        (TerminalSymbol::Symbol(Plus.enum_index()), Action::Reduce(syntax.rules[4].clone())),
+                        (TerminalSymbol::Symbol(Star.enum_index()), Action::Reduce(syntax.rules[4].clone())),
+                    ].into_iter().collect()
+                ),
+                //17:closure([T->T*.F,)+*])=[T->T*.F,)+*],[F->.(E),)+*],[F->.i,)+*]
+                //      Action: (=>s12,i=>s13
+                //      Goto:   F=>20
+                (
+                    17,
+                    vec![
+                        (TerminalSymbol::Symbol(Bracket.enum_index()), Action::Shift(12)),
+                        (TerminalSymbol::Symbol(I.enum_index()), Action::Shift(13)),
+                    ].into_iter().collect()
+                ),
+                //18:closure([E->E+T.,)+],[T->T.*F,)+*])=[E->E+T.,)+],[T->T.*F,)+*]
+                //      Action: *=>s17,)+=>r0
+                (
+                    18,
+                    vec![
+                        (TerminalSymbol::Symbol(CloseBracket.enum_index()), Action::Reduce(syntax.rules[0].clone())),
+                        (TerminalSymbol::Symbol(Plus.enum_index()), Action::Reduce(syntax.rules[0].clone())),
+                        (TerminalSymbol::Symbol(Star.enum_index()), Action::Shift(17)),
+                    ].into_iter().collect()
+                ),
+                //19:closure([F->(E.),)+*],[E->E.+T,)+])=[F->(E.),)+*],[E->E.+T,)+]
+                //      Action: )=>s21,+=>s11
+                (
+                    19,
+                    vec![
+                        (TerminalSymbol::Symbol(CloseBracket.enum_index()), Action::Shift(21)),
+                        (TerminalSymbol::Symbol(Plus.enum_index()), Action::Shift(11)),
+                    ].into_iter().collect()
+                ),
+                //20:closure([T->T*F.,)+*])=[T->T*F.,)+*]
+                //      Action: )+*=>r2
+                (
+                    20,
+                    vec![
+                        (TerminalSymbol::Symbol(CloseBracket.enum_index()), Action::Reduce(syntax.rules[2].clone())),
+                        (TerminalSymbol::Symbol(Plus.enum_index()), Action::Reduce(syntax.rules[2].clone())),
+                        (TerminalSymbol::Symbol(Star.enum_index()), Action::Reduce(syntax.rules[2].clone())),
+                    ].into_iter().collect()
+                ),
+                //21:closure([F->(E).,)+*])=[F->(E).,)+*]
+                //      Action: )+*=>r4
+                (
+                    21,
+                    vec![
+                        (TerminalSymbol::Symbol(CloseBracket.enum_index()), Action::Reduce(syntax.rules[4].clone())),
+                        (TerminalSymbol::Symbol(Plus.enum_index()), Action::Reduce(syntax.rules[4].clone())),
+                        (TerminalSymbol::Symbol(Star.enum_index()), Action::Reduce(syntax.rules[4].clone())),
+                    ].into_iter().collect()
+                ),
+            ].into_iter().collect(),
+            goto_table: vec![
+                (
+                    0,
+                    vec![
+                        (E.enum_index(), 1),
+                        (T.enum_index(), 2),
+                        (F.enum_index(), 3),
+                    ].into_iter().collect()
+                ),
+                (
+                    4,
+                    vec![
+                        (E.enum_index(), 8),
+                        (T.enum_index(), 9),
+                        (F.enum_index(), 10),
+                    ].into_iter().collect()
+                ),
+                (
+                    6,
+                    vec![
+                        (T.enum_index(), 14),
+                        (F.enum_index(), 3),
+                    ].into_iter().collect()
+                ),
+                (
+                    7,
+                    vec![
+                        (F.enum_index(), 15),
+                    ].into_iter().collect()
+                ),
+                (
+                    11,
+                    vec![
+                        (T.enum_index(), 18),
+                        (F.enum_index(), 10),
+                    ].into_iter().collect()
+                ),
+                (
+                    12,
+                    vec![
+                        (E.enum_index(), 19),
+                        (T.enum_index(), 9),
+                        (F.enum_index(), 10),
+                    ].into_iter().collect()
+                ),
+                (
+                    17,
+                    vec![
+                        (F.enum_index(), 20),
+                    ].into_iter().collect()
+                ),
+            ].into_iter().collect(),
+            start: 0,
+        };
+        let (parser, _warning) = Parser::new(syntax);
+        assert!(parser_isomorphisms(&parser, &expect));
     }
 }
