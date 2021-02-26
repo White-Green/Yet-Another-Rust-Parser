@@ -1,18 +1,30 @@
-use std::collections::{HashMap, HashSet};
+use std::cmp::Ordering;
+use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::hash::{Hash, Hasher};
-use std::marker::PhantomData;
 
-use crate::{NumberMapped, Rule, Symbol, Syntax};
+use enum_index::EnumIndex;
+
+use crate::{Rule, Symbol, Syntax};
 use crate::syntax::TerminalSymbol;
 
 #[derive(Debug)]
-struct LR1Item<N: NumberMapped, T> {
+struct LR1Item<N, T> {
     rule: Rule<N, T>,
     position: usize,
-    lookahead_symbol: TerminalSymbol<T>,
+    lookahead_symbol: TerminalSymbolInterop,
 }
 
-impl<N: NumberMapped, T> PartialEq for LR1Item<N, T> {
+impl<N, T> Clone for LR1Item<N, T> {
+    fn clone(&self) -> Self {
+        LR1Item {
+            rule: self.rule.clone(),
+            position: self.position,
+            lookahead_symbol: self.lookahead_symbol.clone(),
+        }
+    }
+}
+
+impl<N, T> PartialEq for LR1Item<N, T> {
     fn eq(&self, other: &Self) -> bool {
         self.rule == other.rule &&
             self.position == other.position &&
@@ -20,9 +32,37 @@ impl<N: NumberMapped, T> PartialEq for LR1Item<N, T> {
     }
 }
 
-impl<N: NumberMapped, T> Eq for LR1Item<N, T> {}
+impl<N, T> Eq for LR1Item<N, T> {}
 
-impl<N: NumberMapped, T> Hash for LR1Item<N, T> {
+impl<N, T> PartialOrd for LR1Item<N, T> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match self.rule.partial_cmp(&other.rule) {
+            Some(Ordering::Equal) => {}
+            other => return other
+        }
+        match self.position.partial_cmp(&other.position) {
+            Some(Ordering::Equal) => {}
+            other => return other
+        }
+        self.lookahead_symbol.partial_cmp(&other.lookahead_symbol)
+    }
+}
+
+impl<N, T> Ord for LR1Item<N, T> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        match self.rule.cmp(&other.rule) {
+            Ordering::Equal => {}
+            other => return other
+        }
+        match self.position.cmp(&other.position) {
+            Ordering::Equal => {}
+            other => return other
+        }
+        self.lookahead_symbol.cmp(&other.lookahead_symbol)
+    }
+}
+
+impl<N, T> Hash for LR1Item<N, T> {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.rule.hash(state);
         self.position.hash(state);
@@ -30,12 +70,30 @@ impl<N: NumberMapped, T> Hash for LR1Item<N, T> {
     }
 }
 
-fn calc_goto<N: NumberMapped, T>(set: &HashSet<LR1Item<N, T>>, syntax: &Syntax<N, T>, null: &HashSet<Symbol<usize, TerminalSymbol<T>>>, first: &HashMap<Symbol<usize, TerminalSymbol<T>>, HashSet<TerminalSymbol<T>>>) -> HashMap<TerminalSymbol<T>, HashSet<LR1Item<N, T>>> {
+#[derive(Debug)]
+enum Action<State, Rule> {
+    Shift(State),
+    Reduce(Rule),
+    Accept,
+}
+
+type NonTerminalSymbolInterop = usize;
+type TerminalSymbolInterop = TerminalSymbol<usize>;
+type StateInterop<N, T> = BTreeSet<LR1Item<N, T>>;
+type SymbolInterop = Symbol<NonTerminalSymbolInterop, TerminalSymbolInterop>;
+type ActionInterop<N, T> = Action<StateInterop<N, T>, Rule<N, T>>;
+type GotoListInterop<N, T> = HashMap<SymbolInterop, StateInterop<N, T>>;
+type NullSetInterop = BTreeSet<SymbolInterop>;
+type FirstSetInterop = HashMap<SymbolInterop, BTreeSet<TerminalSymbolInterop>>;
+type ActionTableInterop<N, T> = HashMap<StateInterop<N, T>, HashMap<TerminalSymbolInterop, ActionInterop<N, T>>>;
+type GotoTableInterop<N, T> = HashMap<StateInterop<N, T>, HashMap<NonTerminalSymbolInterop, StateInterop<N, T>>>;
+
+fn calc_goto<N, T>(set: &StateInterop<N, T>, syntax: &Syntax<N, T>, null: &NullSetInterop, first: &FirstSetInterop) -> GotoListInterop<N, T> {
     let mut goto = HashMap::new();
     for item in set {
-        if let Some(Symbol::Terminal(symbol)) = item.rule.symbols.get(item.position) {
+        if let Some(symbol) = item.rule.symbols.get(item.position) {
             goto.entry(symbol.clone())
-                .or_insert_with(|| HashSet::new())
+                .or_insert_with(|| BTreeSet::new())
                 .insert(LR1Item {
                     rule: item.rule.clone(),
                     position: item.position + 1,
@@ -49,15 +107,15 @@ fn calc_goto<N: NumberMapped, T>(set: &HashSet<LR1Item<N, T>>, syntax: &Syntax<N
     goto
 }
 
-fn calc_closure<N: NumberMapped, T>(set: &mut HashSet<LR1Item<N, T>>, syntax: &Syntax<N, T>, null: &HashSet<Symbol<usize, TerminalSymbol<T>>>, first: &HashMap<Symbol<usize, TerminalSymbol<T>>, HashSet<TerminalSymbol<T>>>) {
+fn calc_closure<N, T>(set: &mut StateInterop<N, T>, syntax: &Syntax<N, T>, null: &NullSetInterop, first: &FirstSetInterop) {
     let mut rules = HashMap::new();
     for rule in &syntax.rules {
         rules.entry(rule.non_terminal)
-            .or_insert_with(|| HashSet::new())
+            .or_insert_with(|| BTreeSet::new())
             .insert(rule);
     }
     loop {
-        let mut update = HashSet::new();
+        let mut update = BTreeSet::new();
         for item in set.iter() {
             let non_terminal = if let Some(Symbol::NonTerminal(non_terminal)) = item.rule.symbols.get(item.position) {
                 *non_terminal
@@ -84,8 +142,8 @@ fn calc_closure<N: NumberMapped, T>(set: &mut HashSet<LR1Item<N, T>>, syntax: &S
     }
 }
 
-fn get_first<'a, T: 'a>(string: impl Iterator<Item=&'a Symbol<usize, TerminalSymbol<T>>>, null: &HashSet<Symbol<usize, TerminalSymbol<T>>>, first: &HashMap<Symbol<usize, TerminalSymbol<T>>, HashSet<TerminalSymbol<T>>>) -> HashSet<TerminalSymbol<T>> {
-    let mut result = HashSet::new();
+fn get_first<'a>(string: impl Iterator<Item=&'a SymbolInterop>, null: &NullSetInterop, first: &FirstSetInterop) -> BTreeSet<TerminalSymbolInterop> {
+    let mut result = BTreeSet::new();
     for symbol in string {
         for symbol in first.get(symbol).map(|set| set.iter()).into_iter().flatten() {
             result.insert(symbol.clone());
@@ -95,8 +153,8 @@ fn get_first<'a, T: 'a>(string: impl Iterator<Item=&'a Symbol<usize, TerminalSym
     result
 }
 
-fn calc_null<N: NumberMapped, T>(syntax: &Syntax<N, T>) -> HashSet<Symbol<usize, TerminalSymbol<T>>> {
-    let mut null = HashSet::new();
+fn calc_null<N, T>(syntax: &Syntax<N, T>) -> NullSetInterop {
+    let mut null = BTreeSet::new();
     loop {
         let mut updated = false;
         for rule in &syntax.rules {
@@ -112,13 +170,13 @@ fn calc_null<N: NumberMapped, T>(syntax: &Syntax<N, T>) -> HashSet<Symbol<usize,
     null
 }
 
-fn calc_first<N: NumberMapped, T>(syntax: &Syntax<N, T>, null: &HashSet<Symbol<usize, TerminalSymbol<T>>>) -> HashMap<Symbol<usize, TerminalSymbol<T>>, HashSet<TerminalSymbol<T>>> {
+fn calc_first<N, T>(syntax: &Syntax<N, T>, null: &NullSetInterop) -> FirstSetInterop {
     let mut first = HashMap::new();
     for rule in &syntax.rules {
         for symbol in &rule.symbols {
             if let Symbol::Terminal(t) = symbol {
                 first.entry(symbol.clone())
-                    .or_insert_with(|| HashSet::new())
+                    .or_insert_with(|| BTreeSet::new())
                     .insert(t.clone());
             }
         }
@@ -127,7 +185,7 @@ fn calc_first<N: NumberMapped, T>(syntax: &Syntax<N, T>, null: &HashSet<Symbol<u
     loop {
         let mut updated = false;
         for rule in &syntax.rules {
-            let mut update = HashSet::new();
+            let mut update = BTreeSet::new();
             for symbol in &rule.symbols {
                 if let Some(first) = first.get(&symbol) {
                     first.iter().cloned().for_each(|item| { update.insert(item); });
@@ -135,7 +193,7 @@ fn calc_first<N: NumberMapped, T>(syntax: &Syntax<N, T>, null: &HashSet<Symbol<u
                 if !null.contains(&symbol) { break; }
             }
             let set = first.entry(Symbol::NonTerminal(rule.non_terminal))
-                .or_insert_with(|| HashSet::new());
+                .or_insert_with(|| BTreeSet::new());
             for item in update {
                 updated |= set.insert(item);
             }
@@ -146,132 +204,198 @@ fn calc_first<N: NumberMapped, T>(syntax: &Syntax<N, T>, null: &HashSet<Symbol<u
     first
 }
 
-struct Parser<N: NumberMapped, T> { p: PhantomData<(N, T)> }
+#[derive(Debug, Clone, PartialEq)]
+pub enum CalcTableWarning<State, N, T> {
+    ShiftReduce { state: State, shift: State, reduce: Rule<N, T> },
+    ReduceReduce { state: State, actions: [Rule<N, T>; 2] },
+}
 
-impl<N: NumberMapped, T> Parser<N, T> {
-    pub fn new(syntax: Syntax<N, T>) -> Self {
-        unimplemented!()
+fn calc_table<N, T>(state_list: HashMap<StateInterop<N, T>, GotoListInterop<N, T>>, start_rule: &Rule<N, T>) -> (ActionTableInterop<N, T>, GotoTableInterop<N, T>, Vec<CalcTableWarning<StateInterop<N, T>, N, T>>) {
+    let mut action_table = HashMap::new();
+    let mut goto_table = HashMap::new();
+    let mut warnings = Vec::new();
+    for (state, goto_list) in state_list {
+        let mut action = HashMap::new();
+        let mut goto = HashMap::new();
+        for (symbol, goto_state) in goto_list {
+            match symbol {
+                Symbol::NonTerminal(symbol) => { goto.insert(symbol, goto_state); }
+                Symbol::Terminal(symbol) => { action.insert(symbol, Action::Shift(goto_state)); }
+            }
+        }
+        let current_state = state.clone();
+        for item in state {
+            if item.position == item.rule.symbols.len() {
+                if &item.rule == start_rule {
+                    action.insert(TerminalSymbol::EOI, Action::Accept);
+                } else {
+                    match action.get(&item.lookahead_symbol) {
+                        None => { action.insert(item.lookahead_symbol, Action::Reduce(item.rule)); }
+                        Some(Action::Shift(shift)) => { warnings.push(CalcTableWarning::ShiftReduce { state: current_state.clone(), shift: shift.clone(), reduce: item.rule }); }
+                        Some(Action::Reduce(reduce)) => { warnings.push(CalcTableWarning::ReduceReduce { state: current_state.clone(), actions: [reduce.clone(), item.rule] }); }
+                        Some(Action::Accept) => unreachable!(),
+                    }
+                }
+            }
+        }
+        if !goto.is_empty() {
+            goto_table.insert(current_state.clone(), goto);
+        }
+        action_table.insert(current_state, action);
+    }
+    (action_table, goto_table, warnings)
+}
+
+fn calc_all_goto<N, T>(syntax: &Syntax<N, T>, start_state: StateInterop<N, T>, null: &NullSetInterop, first: &FirstSetInterop) -> HashMap<StateInterop<N, T>, GotoListInterop<N, T>> {
+    let mut q = VecDeque::new();
+    q.push_back(start_state);
+    let mut state_list = HashMap::new();
+    while let Some(state) = q.pop_front() {
+        if state_list.contains_key(&state) { continue; }
+        let goto = calc_goto(&state, &syntax, &null, &first);
+        for (_, new_state) in &goto {
+            q.push_back(new_state.clone());
+        }
+        state_list.insert(state, goto);
+    }
+    state_list
+}
+
+struct Parser<N, T> {
+    pub(crate) action_table: HashMap<usize, HashMap<TerminalSymbol<usize>, Action<usize, Rule<N, T>>>>,
+    pub(crate) goto_table: HashMap<usize, HashMap<usize, usize>>,
+}
+
+impl<N: EnumIndex, T: EnumIndex> Parser<N, T> {
+    pub fn new(mut syntax: Syntax<N, T>) -> (Self, Vec<CalcTableWarning<usize, N, T>>) {
+        let start_symbol = {
+            let mut non_terminal_symbols = BTreeSet::new();
+            for rule in &syntax.rules {
+                non_terminal_symbols.insert(rule.non_terminal);
+                for symbol in &rule.symbols {
+                    if let Symbol::NonTerminal(non_terminal) = symbol {
+                        non_terminal_symbols.insert(*non_terminal);
+                    }
+                }
+            }
+            (0..).into_iter().find(|i| !non_terminal_symbols.contains(i)).unwrap()
+        };
+        let start_rule = Rule::new_raw(start_symbol).non_terminal_raw(syntax.start);
+        syntax.rules.push(start_rule.clone());
+        let null = calc_null(&syntax);
+        let first = calc_first(&syntax, &null);
+        let mut start_state = vec![LR1Item { rule: start_rule.clone(), position: 0, lookahead_symbol: TerminalSymbol::EOI }].into_iter().collect();
+        calc_closure(&mut start_state, &syntax, &null, &first);
+        let state_list = calc_all_goto(&syntax, start_state, &null, &first);
+
+        let mut state_index = HashMap::new();
+        let mut i = 0usize;
+        for (state, _) in &state_list {
+            state_index.insert(state.clone(), i);
+            i += 1;
+        }
+        let (action_table, goto_table, warnings) = calc_table(state_list, &start_rule);
+        let mut action_table: HashMap<_, _> = action_table.into_iter()
+            .map(|(state, action)| (
+                *state_index.get(&state).unwrap(),
+                action.into_iter()
+                    .map(|(symbol, action)| (
+                        symbol,
+                        match action {
+                            Action::Shift(state) => Action::Shift(*state_index.get(&state).unwrap()),
+                            Action::Reduce(rule) => Action::Reduce(rule),
+                            Action::Accept => Action::Accept
+                        }
+                    ))
+                    .collect()
+            ))
+            .collect();
+        let mut goto_table: HashMap<_, _> = goto_table.into_iter()
+            .map(|(state, goto)| (
+                *state_index.get(&state).unwrap(),
+                goto.into_iter()
+                    .map(|(non_terminal, state)| (
+                        non_terminal,
+                        *state_index.get(&state).unwrap()
+                    ))
+                    .collect()
+            ))
+            .collect();
+        let warnings = warnings.into_iter()
+            .map(|warning| match warning {
+                CalcTableWarning::ShiftReduce { state, shift, reduce } => CalcTableWarning::ShiftReduce { state: *state_index.get(&state).unwrap(), shift: *state_index.get(&shift).unwrap(), reduce },
+                CalcTableWarning::ReduceReduce { state, actions } => CalcTableWarning::ReduceReduce { state: *state_index.get(&state).unwrap(), actions }
+            })
+            .collect();
+        action_table.shrink_to_fit();
+        goto_table.shrink_to_fit();
+        (Parser { action_table, goto_table }, warnings)
     }
 }
 
-impl<N: NumberMapped, T> From<Syntax<N, T>> for Parser<N, T> {
+impl<N: EnumIndex, T: EnumIndex> From<Syntax<N, T>> for Parser<N, T> {
     fn from(syntax: Syntax<N, T>) -> Self {
-        Self::new(syntax)
+        Self::new(syntax).0
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
-    use std::rc::Rc;
-
-    use crate::{NumberMapped, Rule, Symbol, Syntax};
+    use crate::{EnumIndex, Rule, Symbol, Syntax};
     use crate::parser::{calc_closure, calc_first, calc_goto, calc_null, LR1Item};
     use crate::syntax::TerminalSymbol;
 
     #[test]
     fn null() {
-        #[derive(Debug, PartialEq)]
-        enum E { A, B, C }
-        impl NumberMapped for E {
-            fn get_number(&self) -> usize {
-                match self {
-                    E::A => 0,
-                    E::B => 1,
-                    E::C => 2,
-                }
-            }
-
-            fn default_from_number(number: usize) -> Option<Self> {
-                match number {
-                    0 => Some(E::A),
-                    1 => Some(E::B),
-                    2 => Some(E::C),
-                    _ => None
-                }
-            }
-        }
-        let term0 = Rc::new(|v: &i32| *v == 0) as Rc<dyn Fn(&i32) -> bool>;
-        let term1 = Rc::new(|v: &i32| *v == 1) as Rc<dyn Fn(&i32) -> bool>;
-        let syntax = Syntax::new()
-            .rule(Rule::new(E::A).non_terminal(E::B).non_terminal(E::C).terminal_rc(Rc::clone(&term0)))
-            .rule(Rule::new(E::A).non_terminal(E::C).terminal_rc(Rc::clone(&term1)))
-            .rule(Rule::new(E::B).non_terminal(E::C))
-            .rule(Rule::new(E::B).non_terminal(E::A))
-            .rule(Rule::new(E::C));
-        assert_eq!(calc_null(&syntax), vec![Symbol::NonTerminal(E::C.get_number()), Symbol::NonTerminal(E::B.get_number())].into_iter().collect())
+        #[derive(Debug, PartialEq, EnumIndex)]
+        enum N { A, B, C }
+        #[derive(Debug, PartialEq, EnumIndex)]
+        enum T { A, B }
+        let syntax = Syntax::builder()
+            .rule(Rule::new(N::A).non_terminal(N::B).non_terminal(N::C).terminal(T::A))
+            .rule(Rule::new(N::A).non_terminal(N::C).terminal(T::B))
+            .rule(Rule::new(N::B).non_terminal(N::C))
+            .rule(Rule::new(N::B).non_terminal(N::A))
+            .rule(Rule::new(N::C))
+            .build(N::A);
+        assert_eq!(calc_null(&syntax), vec![Symbol::NonTerminal(N::C.enum_index()), Symbol::NonTerminal(N::B.enum_index())].into_iter().collect())
     }
 
     #[test]
     fn first() {
-        #[derive(Debug, PartialEq)]
-        enum E { A, B, C }
-        impl NumberMapped for E {
-            fn get_number(&self) -> usize {
-                match self {
-                    E::A => 0,
-                    E::B => 1,
-                    E::C => 2,
-                }
-            }
-
-            fn default_from_number(number: usize) -> Option<Self> {
-                match number {
-                    0 => Some(E::A),
-                    1 => Some(E::B),
-                    2 => Some(E::C),
-                    _ => None
-                }
-            }
-        }
-        let term0 = Rc::new(|v: &i32| *v == 0) as Rc<dyn Fn(&i32) -> bool>;
-        let term1 = Rc::new(|v: &i32| *v == 1) as Rc<dyn Fn(&i32) -> bool>;
-        let syntax = Syntax::new()
-            .rule(Rule::new(E::A).non_terminal(E::B).non_terminal(E::C).terminal_rc(Rc::clone(&term0)))
-            .rule(Rule::new(E::A).non_terminal(E::C).terminal_rc(Rc::clone(&term1)))
-            .rule(Rule::new(E::B).non_terminal(E::C))
-            .rule(Rule::new(E::B).non_terminal(E::A))
-            .rule(Rule::new(E::C));
+        #[derive(Debug, PartialEq, EnumIndex)]
+        enum N { A, B, C }
+        #[derive(Debug, PartialEq, EnumIndex)]
+        enum T { A, B }
+        let syntax = Syntax::builder()
+            .rule(Rule::new(N::A).non_terminal(N::B).non_terminal(N::C).terminal(T::A))
+            .rule(Rule::new(N::A).non_terminal(N::C).terminal(T::B))
+            .rule(Rule::new(N::B).non_terminal(N::C))
+            .rule(Rule::new(N::B).non_terminal(N::A))
+            .rule(Rule::new(N::C))
+            .build(N::A);
         let first = calc_first(&syntax, &calc_null(&syntax));
-        assert_eq!(first[&Symbol::NonTerminal(E::A.get_number())], vec![(TerminalSymbol::Symbol(Rc::clone(&term0))), (TerminalSymbol::Symbol(Rc::clone(&term1)))].into_iter().collect());
-        assert_eq!(first[&Symbol::NonTerminal(E::B.get_number())], vec![(TerminalSymbol::Symbol(Rc::clone(&term0))), (TerminalSymbol::Symbol(Rc::clone(&term1)))].into_iter().collect());
-        assert_eq!(first[&Symbol::NonTerminal(E::C.get_number())], vec![].into_iter().collect());
-        assert_eq!(first[&Symbol::Terminal(TerminalSymbol::Symbol(Rc::clone(&term0)))], vec![(TerminalSymbol::Symbol(Rc::clone(&term0)))].into_iter().collect());
-        assert_eq!(first[&Symbol::Terminal(TerminalSymbol::Symbol(Rc::clone(&term1)))], vec![(TerminalSymbol::Symbol(Rc::clone(&term1)))].into_iter().collect());
+        assert_eq!(first[&Symbol::NonTerminal(N::A.enum_index())], vec![(TerminalSymbol::Symbol(T::A.enum_index())), (TerminalSymbol::Symbol(T::B.enum_index()))].into_iter().collect());
+        assert_eq!(first[&Symbol::NonTerminal(N::B.enum_index())], vec![(TerminalSymbol::Symbol(T::A.enum_index())), (TerminalSymbol::Symbol(T::B.enum_index()))].into_iter().collect());
+        assert_eq!(first[&Symbol::NonTerminal(N::C.enum_index())], vec![].into_iter().collect());
+        assert_eq!(first[&Symbol::Terminal(TerminalSymbol::Symbol(T::A.enum_index()))], vec![(TerminalSymbol::Symbol(T::A.enum_index()))].into_iter().collect());
+        assert_eq!(first[&Symbol::Terminal(TerminalSymbol::Symbol(T::B.enum_index()))], vec![(TerminalSymbol::Symbol(T::B.enum_index()))].into_iter().collect());
     }
 
     #[test]
     fn closure() {
-        #[derive(Debug, PartialEq)]
-        enum E { A, B, C }
-        impl NumberMapped for E {
-            fn get_number(&self) -> usize {
-                match self {
-                    E::A => 0,
-                    E::B => 1,
-                    E::C => 2,
-                }
-            }
-
-            fn default_from_number(number: usize) -> Option<Self> {
-                match number {
-                    0 => Some(E::A),
-                    1 => Some(E::B),
-                    2 => Some(E::C),
-                    _ => None
-                }
-            }
-        }
-        let term0 = Rc::new(|v: &i32| *v == 0) as Rc<dyn Fn(&i32) -> bool>;
-        let term1 = Rc::new(|v: &i32| *v == 1) as Rc<dyn Fn(&i32) -> bool>;
-        let term2 = Rc::new(|v: &i32| *v == 2) as Rc<dyn Fn(&i32) -> bool>;
-        let syntax = Syntax::new()
-            .rule(Rule::new(E::A).non_terminal(E::B).non_terminal(E::C).terminal_rc(Rc::clone(&term0)))
-            .rule(Rule::new(E::A).non_terminal(E::C).terminal_rc(Rc::clone(&term1)))
-            .rule(Rule::new(E::B).non_terminal(E::C))
-            .rule(Rule::new(E::B).non_terminal(E::A))
-            .rule(Rule::new(E::C).terminal_rc(Rc::clone(&term2)))
-            .rule(Rule::new(E::C));
+        #[derive(Debug, PartialEq, EnumIndex)]
+        enum N { A, B, C }
+        #[derive(Debug, PartialEq, EnumIndex)]
+        enum T { A, B, C }
+        let syntax = Syntax::builder()
+            .rule(Rule::new(N::A).non_terminal(N::B).non_terminal(N::C).terminal(T::A))
+            .rule(Rule::new(N::A).non_terminal(N::C).terminal(T::B))
+            .rule(Rule::new(N::B).non_terminal(N::C))
+            .rule(Rule::new(N::B).non_terminal(N::A))
+            .rule(Rule::new(N::C).terminal(T::C))
+            .rule(Rule::new(N::C))
+            .build(N::A);
         let null = calc_null(&syntax);
         let first = calc_first(&syntax, &null);
         let mut closure = vec![LR1Item {
@@ -289,108 +413,90 @@ mod tests {
             LR1Item {
                 rule: syntax.rules[0].clone(),
                 position: 0,
-                lookahead_symbol: TerminalSymbol::Symbol(Rc::clone(&term0)),
+                lookahead_symbol: TerminalSymbol::Symbol(T::A.enum_index()),
             },
             LR1Item {
                 rule: syntax.rules[0].clone(),
                 position: 0,
-                lookahead_symbol: TerminalSymbol::Symbol(Rc::clone(&term2)),
+                lookahead_symbol: TerminalSymbol::Symbol(T::C.enum_index()),
             },
             LR1Item {
                 rule: syntax.rules[1].clone(),
                 position: 0,
-                lookahead_symbol: TerminalSymbol::Symbol(Rc::clone(&term0)),
+                lookahead_symbol: TerminalSymbol::Symbol(T::A.enum_index()),
             },
             LR1Item {
                 rule: syntax.rules[1].clone(),
                 position: 0,
-                lookahead_symbol: TerminalSymbol::Symbol(Rc::clone(&term2)),
+                lookahead_symbol: TerminalSymbol::Symbol(T::C.enum_index()),
             },
             LR1Item {
                 rule: syntax.rules[2].clone(),
                 position: 0,
-                lookahead_symbol: TerminalSymbol::Symbol(Rc::clone(&term0)),
+                lookahead_symbol: TerminalSymbol::Symbol(T::A.enum_index()),
             },
             LR1Item {
                 rule: syntax.rules[2].clone(),
                 position: 0,
-                lookahead_symbol: TerminalSymbol::Symbol(Rc::clone(&term2)),
+                lookahead_symbol: TerminalSymbol::Symbol(T::C.enum_index()),
             },
             LR1Item {
                 rule: syntax.rules[3].clone(),
                 position: 0,
-                lookahead_symbol: TerminalSymbol::Symbol(Rc::clone(&term0)),
+                lookahead_symbol: TerminalSymbol::Symbol(T::A.enum_index()),
             },
             LR1Item {
                 rule: syntax.rules[3].clone(),
                 position: 0,
-                lookahead_symbol: TerminalSymbol::Symbol(Rc::clone(&term2)),
+                lookahead_symbol: TerminalSymbol::Symbol(T::C.enum_index()),
             },
             LR1Item {
                 rule: syntax.rules[4].clone(),
                 position: 0,
-                lookahead_symbol: TerminalSymbol::Symbol(Rc::clone(&term0)),
+                lookahead_symbol: TerminalSymbol::Symbol(T::A.enum_index()),
             },
             LR1Item {
                 rule: syntax.rules[4].clone(),
                 position: 0,
-                lookahead_symbol: TerminalSymbol::Symbol(Rc::clone(&term1)),
+                lookahead_symbol: TerminalSymbol::Symbol(T::B.enum_index()),
             },
             LR1Item {
                 rule: syntax.rules[4].clone(),
                 position: 0,
-                lookahead_symbol: TerminalSymbol::Symbol(Rc::clone(&term2)),
+                lookahead_symbol: TerminalSymbol::Symbol(T::C.enum_index()),
             },
             LR1Item {
                 rule: syntax.rules[5].clone(),
                 position: 0,
-                lookahead_symbol: TerminalSymbol::Symbol(Rc::clone(&term0)),
+                lookahead_symbol: TerminalSymbol::Symbol(T::A.enum_index()),
             },
             LR1Item {
                 rule: syntax.rules[5].clone(),
                 position: 0,
-                lookahead_symbol: TerminalSymbol::Symbol(Rc::clone(&term1)),
+                lookahead_symbol: TerminalSymbol::Symbol(T::B.enum_index()),
             },
             LR1Item {
                 rule: syntax.rules[5].clone(),
                 position: 0,
-                lookahead_symbol: TerminalSymbol::Symbol(Rc::clone(&term2)),
+                lookahead_symbol: TerminalSymbol::Symbol(T::C.enum_index()),
             },
         ].into_iter().collect());
     }
 
     #[test]
     fn goto() {
-        #[derive(Debug, PartialEq)]
-        enum E { A, B, C }
-        impl NumberMapped for E {
-            fn get_number(&self) -> usize {
-                match self {
-                    E::A => 0,
-                    E::B => 1,
-                    E::C => 2,
-                }
-            }
-
-            fn default_from_number(number: usize) -> Option<Self> {
-                match number {
-                    0 => Some(E::A),
-                    1 => Some(E::B),
-                    2 => Some(E::C),
-                    _ => None
-                }
-            }
-        }
-        let term0 = Rc::new(|v: &i32| *v == 0) as Rc<dyn Fn(&i32) -> bool>;
-        let term1 = Rc::new(|v: &i32| *v == 1) as Rc<dyn Fn(&i32) -> bool>;
-        let term2 = Rc::new(|v: &i32| *v == 2) as Rc<dyn Fn(&i32) -> bool>;
-        let syntax = Syntax::new()
-            .rule(Rule::new(E::A).non_terminal(E::B).non_terminal(E::C).terminal_rc(Rc::clone(&term0)))
-            .rule(Rule::new(E::A).non_terminal(E::C).terminal_rc(Rc::clone(&term1)))
-            .rule(Rule::new(E::B).non_terminal(E::C))
-            .rule(Rule::new(E::B).non_terminal(E::A))
-            .rule(Rule::new(E::C).terminal_rc(Rc::clone(&term2)))
-            .rule(Rule::new(E::C));
+        #[derive(Debug, PartialEq, EnumIndex)]
+        enum N { A, B, C }
+        #[derive(Debug, PartialEq, EnumIndex)]
+        enum T { A, B, C }
+        let syntax = Syntax::builder()
+            .rule(Rule::new(N::A).non_terminal(N::B).non_terminal(N::C).terminal(T::A))
+            .rule(Rule::new(N::A).non_terminal(N::C).terminal(T::B))
+            .rule(Rule::new(N::B).non_terminal(N::C))
+            .rule(Rule::new(N::B).non_terminal(N::A))
+            .rule(Rule::new(N::C).terminal(T::C))
+            .rule(Rule::new(N::C))
+            .build(N::A);
         let null = calc_null(&syntax);
         let first = calc_first(&syntax, &null);
         let closure = {
@@ -404,25 +510,89 @@ mod tests {
         };
         let goto = calc_goto(&closure, &syntax, &null, &first);
         assert_eq!(goto, vec![
-            (TerminalSymbol::Symbol(Rc::clone(&term2)),
+            (Symbol::Terminal(TerminalSymbol::Symbol(T::C.enum_index())),
              vec![
                  LR1Item {
                      rule: syntax.rules[4].clone(),
                      position: 1,
-                     lookahead_symbol: TerminalSymbol::Symbol(Rc::clone(&term0)),
+                     lookahead_symbol: TerminalSymbol::Symbol(T::A.enum_index()),
                  },
                  LR1Item {
                      rule: syntax.rules[4].clone(),
                      position: 1,
-                     lookahead_symbol: TerminalSymbol::Symbol(Rc::clone(&term1)),
+                     lookahead_symbol: TerminalSymbol::Symbol(T::B.enum_index()),
                  },
                  LR1Item {
                      rule: syntax.rules[4].clone(),
                      position: 1,
-                     lookahead_symbol: TerminalSymbol::Symbol(Rc::clone(&term2)),
+                     lookahead_symbol: TerminalSymbol::Symbol(T::C.enum_index()),
                  },
              ].into_iter().collect()
-            )
+            ),
+            (Symbol::NonTerminal(N::A.enum_index()),
+             vec![
+                 LR1Item {
+                     rule: syntax.rules[3].clone(),
+                     position: 1,
+                     lookahead_symbol: TerminalSymbol::Symbol(T::A.enum_index()),
+                 },
+                 LR1Item {
+                     rule: syntax.rules[3].clone(),
+                     position: 1,
+                     lookahead_symbol: TerminalSymbol::Symbol(T::C.enum_index()),
+                 },
+             ].into_iter().collect()),
+            (Symbol::NonTerminal(N::B.enum_index()),
+             vec![
+                 LR1Item {
+                     rule: syntax.rules[0].clone(),
+                     position: 1,
+                     lookahead_symbol: TerminalSymbol::EOI,
+                 },
+                 LR1Item {
+                     rule: syntax.rules[0].clone(),
+                     position: 1,
+                     lookahead_symbol: TerminalSymbol::Symbol(T::A.enum_index()),
+                 },
+                 LR1Item {
+                     rule: syntax.rules[0].clone(),
+                     position: 1,
+                     lookahead_symbol: TerminalSymbol::Symbol(T::C.enum_index()),
+                 },
+                 LR1Item {
+                     rule: syntax.rules[4].clone(),
+                     position: 0,
+                     lookahead_symbol: TerminalSymbol::Symbol(T::A.enum_index()),
+                 },
+                 LR1Item {
+                     rule: syntax.rules[5].clone(),
+                     position: 0,
+                     lookahead_symbol: TerminalSymbol::Symbol(T::A.enum_index()),
+                 },
+             ].into_iter().collect()),
+            (Symbol::NonTerminal(N::C.enum_index()),
+             vec![
+                 LR1Item {
+                     rule: syntax.rules[1].clone(),
+                     position: 1,
+                     lookahead_symbol: TerminalSymbol::Symbol(T::A.enum_index()),
+                 },
+                 LR1Item {
+                     rule: syntax.rules[1].clone(),
+                     position: 1,
+                     lookahead_symbol: TerminalSymbol::Symbol(T::C.enum_index()),
+                 },
+                 LR1Item {
+                     rule: syntax.rules[2].clone(),
+                     position: 1,
+                     lookahead_symbol: TerminalSymbol::Symbol(T::A.enum_index()),
+                 },
+                 LR1Item {
+                     rule: syntax.rules[2].clone(),
+                     position: 1,
+                     lookahead_symbol: TerminalSymbol::Symbol(T::C.enum_index()),
+                 },
+             ].into_iter().collect())
         ].into_iter().collect());
     }
 }
