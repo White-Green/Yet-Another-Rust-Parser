@@ -141,7 +141,7 @@ impl<'a> TokenizerDFA<'a> {
         self.begin.clone()
     }
 
-    pub(crate) fn end(&self, node_ref: &TokenizerDFANodeRef) -> Option<usize> {
+    pub(crate) fn accept_index(&self, node_ref: &TokenizerDFANodeRef) -> Option<usize> {
         self.end.get(node_ref).copied()
     }
 
