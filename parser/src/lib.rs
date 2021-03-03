@@ -7,14 +7,11 @@ pub use crate::syntax::{Rule, Syntax};
 
 mod parser;
 mod syntax;
+mod iter;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-enum Symbol<N, T> {
+pub enum Symbol<N, T> {
     NonTerminal(N),
     Terminal(T),
+    Error,
 }
-
-// pub trait EnumIndex: Sized {
-//     fn enum_index(&self) -> usize;
-//     fn default_from_number(number: usize) -> Option<Self>;
-// }

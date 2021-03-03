@@ -1,15 +1,22 @@
 use std::cmp::Ordering;
-use std::collections::{BTreeSet, HashMap, VecDeque};
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::hash::{Hash, Hasher};
+use std::rc::Rc;
 
 use enum_index::EnumIndex;
 
-use crate::{Rule, Symbol, Syntax};
+use crate::{Rule, Syntax};
 use crate::syntax::TerminalSymbol;
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub(crate) enum SymbolInternal<N, T> {
+    NonTerminal(N),
+    Terminal(T),
+}
 
 #[derive(Debug)]
 struct LR1Item<N, T> {
-    rule: Rule<N, T>,
+    rule: Rc<Rule<N, T>>,
     position: usize,
     lookahead_symbol: TerminalSymbolInterop,
 }
@@ -71,7 +78,7 @@ impl<N, T> Hash for LR1Item<N, T> {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-enum Action<State, Rule> {
+pub(crate) enum Action<State, Rule> {
     Shift(State),
     Reduce(Rule),
     Accept,
@@ -80,8 +87,8 @@ enum Action<State, Rule> {
 type NonTerminalSymbolInterop = usize;
 type TerminalSymbolInterop = TerminalSymbol<usize>;
 type StateInterop<N, T> = BTreeSet<LR1Item<N, T>>;
-type SymbolInterop = Symbol<NonTerminalSymbolInterop, TerminalSymbolInterop>;
-type ActionInterop<N, T> = Action<StateInterop<N, T>, Rule<N, T>>;
+type SymbolInterop = SymbolInternal<NonTerminalSymbolInterop, TerminalSymbolInterop>;
+type ActionInterop<N, T> = Action<StateInterop<N, T>, Rc<Rule<N, T>>>;
 type GotoListInterop<N, T> = HashMap<SymbolInterop, StateInterop<N, T>>;
 type NullSetInterop = BTreeSet<SymbolInterop>;
 type FirstSetInterop = HashMap<SymbolInterop, BTreeSet<TerminalSymbolInterop>>;
@@ -117,17 +124,17 @@ fn calc_closure<N, T>(set: &mut StateInterop<N, T>, syntax: &Syntax<N, T>, null:
     loop {
         let mut update = BTreeSet::new();
         for item in set.iter() {
-            let non_terminal = if let Some(Symbol::NonTerminal(non_terminal)) = item.rule.symbols.get(item.position) {
+            let non_terminal = if let Some(SymbolInternal::NonTerminal(non_terminal)) = item.rule.symbols.get(item.position) {
                 *non_terminal
             } else {
                 continue;
             };
-            let lookahead_symbol = Symbol::Terminal(item.lookahead_symbol.clone());
+            let lookahead_symbol = SymbolInternal::Terminal(item.lookahead_symbol.clone());
             let follow = item.rule.symbols.get(item.position + 1..).unwrap_or(&[]).iter().chain(Some(&lookahead_symbol));
             for lookahead_symbol in get_first(follow, null, first) {
                 for rule in &rules[&non_terminal] {
                     update.insert(LR1Item {
-                        rule: Rule::clone(rule),
+                        rule: Rc::clone(rule),
                         position: 0,
                         lookahead_symbol: lookahead_symbol.clone(),
                     });
@@ -145,7 +152,7 @@ fn calc_closure<N, T>(set: &mut StateInterop<N, T>, syntax: &Syntax<N, T>, null:
 fn get_first<'a>(string: impl Iterator<Item=&'a SymbolInterop>, null: &NullSetInterop, first: &FirstSetInterop) -> BTreeSet<TerminalSymbolInterop> {
     let mut result = BTreeSet::new();
     for symbol in string {
-        if let Symbol::Terminal(symbol) = symbol {
+        if let SymbolInternal::Terminal(symbol) = symbol {
             result.insert(symbol.clone());
         } else {
             for symbol in first.get(symbol).map(|set| set.iter()).into_iter().flatten().cloned() {
@@ -162,10 +169,10 @@ fn calc_null<N, T>(syntax: &Syntax<N, T>) -> NullSetInterop {
     loop {
         let mut updated = false;
         for rule in &syntax.rules {
-            if null.contains(&Symbol::NonTerminal(rule.non_terminal)) { continue; }
+            if null.contains(&SymbolInternal::NonTerminal(rule.non_terminal)) { continue; }
             if rule.symbols.iter().all(|symbol| null.contains(symbol))
             {
-                null.insert(Symbol::NonTerminal(rule.non_terminal));
+                null.insert(SymbolInternal::NonTerminal(rule.non_terminal));
                 updated = true;
             }
         }
@@ -178,7 +185,7 @@ fn calc_first<N, T>(syntax: &Syntax<N, T>, null: &NullSetInterop) -> FirstSetInt
     let mut first = HashMap::new();
     for rule in &syntax.rules {
         for symbol in &rule.symbols {
-            if let Symbol::Terminal(t) = symbol {
+            if let SymbolInternal::Terminal(t) = symbol {
                 first.entry(symbol.clone())
                     .or_insert_with(|| BTreeSet::new())
                     .insert(t.clone());
@@ -196,7 +203,7 @@ fn calc_first<N, T>(syntax: &Syntax<N, T>, null: &NullSetInterop) -> FirstSetInt
                 }
                 if !null.contains(&symbol) { break; }
             }
-            let set = first.entry(Symbol::NonTerminal(rule.non_terminal))
+            let set = first.entry(SymbolInternal::NonTerminal(rule.non_terminal))
                 .or_insert_with(|| BTreeSet::new());
             for item in update {
                 updated |= set.insert(item);
@@ -210,11 +217,11 @@ fn calc_first<N, T>(syntax: &Syntax<N, T>, null: &NullSetInterop) -> FirstSetInt
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum CalcTableWarning<State, N, T> {
-    ShiftReduce { state: State, shift: State, reduce: Rule<N, T> },
-    ReduceReduce { state: State, actions: [Rule<N, T>; 2] },
+    ShiftReduce { state: State, shift: State, reduce: Rc<Rule<N, T>> },
+    ReduceReduce { state: State, actions: [Rc<Rule<N, T>>; 2] },
 }
 
-fn calc_table<N, T>(state_list: HashMap<StateInterop<N, T>, GotoListInterop<N, T>>, start_rule: &Rule<N, T>) -> (ActionTableInterop<N, T>, GotoTableInterop<N, T>, Vec<CalcTableWarning<StateInterop<N, T>, N, T>>) {
+fn calc_table<N, T>(state_list: HashMap<StateInterop<N, T>, GotoListInterop<N, T>>, start_rule: &Rc<Rule<N, T>>) -> (ActionTableInterop<N, T>, GotoTableInterop<N, T>, Vec<CalcTableWarning<StateInterop<N, T>, N, T>>) {
     let mut action_table = HashMap::new();
     let mut goto_table = HashMap::new();
     let mut warnings = Vec::new();
@@ -223,8 +230,8 @@ fn calc_table<N, T>(state_list: HashMap<StateInterop<N, T>, GotoListInterop<N, T
         let mut goto = HashMap::new();
         for (symbol, goto_state) in goto_list {
             match symbol {
-                Symbol::NonTerminal(symbol) => { goto.insert(symbol, goto_state); }
-                Symbol::Terminal(symbol) => { action.insert(symbol, Action::Shift(goto_state)); }
+                SymbolInternal::NonTerminal(symbol) => { goto.insert(symbol, goto_state); }
+                SymbolInternal::Terminal(symbol) => { action.insert(symbol, Action::Shift(goto_state)); }
             }
         }
         let current_state = state.clone();
@@ -265,10 +272,26 @@ fn calc_all_goto<N, T>(syntax: &Syntax<N, T>, start_state: StateInterop<N, T>, n
     state_list
 }
 
+fn calc_error_rules<N, T>(state_index: &HashMap<StateInterop<N, T>, usize>) -> HashMap<usize, HashSet<Rc<Rule<N, T>>>> {
+    let mut error_rules = HashMap::new();
+    for (item_list, index) in state_index {
+        let mut set = HashSet::new();
+        for item in item_list {
+            if item.rule.symbols.get(item.position) == Some(&SymbolInternal::Terminal(TerminalSymbol::Error)) {
+                set.insert(Rc::clone(&item.rule));
+            }
+        }
+        if !set.is_empty() { error_rules.insert(*index, set); }
+    }
+    error_rules.shrink_to_fit();
+    error_rules
+}
+
 #[derive(Debug, Clone, PartialEq)]
-struct Parser<N, T> {
-    pub(crate) action_table: HashMap<usize, HashMap<TerminalSymbol<usize>, Action<usize, Rule<N, T>>>>,
+pub struct Parser<N, T> {
+    pub(crate) action_table: HashMap<usize, HashMap<TerminalSymbol<usize>, Action<usize, Rc<Rule<N, T>>>>>,
     pub(crate) goto_table: HashMap<usize, HashMap<usize, usize>>,
+    pub(crate) error_rules: HashMap<usize, HashSet<Rc<Rule<N, T>>>>,
     pub(crate) start: usize,
 }
 
@@ -279,14 +302,15 @@ impl<N: EnumIndex, T: EnumIndex> Parser<N, T> {
             for rule in &syntax.rules {
                 non_terminal_symbols.insert(rule.non_terminal);
                 for symbol in &rule.symbols {
-                    if let Symbol::NonTerminal(non_terminal) = symbol {
+                    if let SymbolInternal::NonTerminal(non_terminal) = symbol {
                         non_terminal_symbols.insert(*non_terminal);
                     }
                 }
             }
             (0..).into_iter().find(|i| !non_terminal_symbols.contains(i)).unwrap()
         };
-        let start_rule = Rule::new_raw(start_symbol).non_terminal_raw(syntax.start);
+        let start_rule = Rule::builder_raw(start_symbol).non_terminal_raw(syntax.start).build(|_| unimplemented!());
+        let start_rule = Rc::new(start_rule);
         syntax.rules.push(start_rule.clone());
         let null = calc_null(&syntax);
         let first = calc_first(&syntax, &null);
@@ -335,7 +359,7 @@ impl<N: EnumIndex, T: EnumIndex> Parser<N, T> {
             .collect();
         action_table.shrink_to_fit();
         goto_table.shrink_to_fit();
-        (Parser { action_table, goto_table, start: *state_index.get(&start_state).unwrap() }, warnings)
+        (Parser { action_table, goto_table, error_rules: calc_error_rules(&state_index), start: *state_index.get(&start_state).unwrap() }, warnings)
     }
 }
 
@@ -349,9 +373,10 @@ impl<N: EnumIndex, T: EnumIndex> From<Syntax<N, T>> for Parser<N, T> {
 mod tests {
     use std::collections::{HashMap, HashSet, VecDeque};
     use std::fmt::Debug;
+    use std::rc::Rc;
 
-    use crate::{EnumIndex, Rule, Symbol, Syntax};
-    use crate::parser::{Action, calc_closure, calc_first, calc_goto, calc_null, LR1Item, Parser};
+    use crate::{EnumIndex, Rule, Syntax};
+    use crate::parser::{Action, calc_closure, calc_first, calc_goto, calc_null, LR1Item, Parser, SymbolInternal};
     use crate::syntax::TerminalSymbol;
 
     #[test]
@@ -361,13 +386,13 @@ mod tests {
         #[derive(Debug, PartialEq, EnumIndex)]
         enum T { A, B }
         let syntax = Syntax::builder()
-            .rule(Rule::new(N::A).non_terminal(N::B).non_terminal(N::C).terminal(T::A))
-            .rule(Rule::new(N::A).non_terminal(N::C).terminal(T::B))
-            .rule(Rule::new(N::B).non_terminal(N::C))
-            .rule(Rule::new(N::B).non_terminal(N::A))
-            .rule(Rule::new(N::C))
+            .rule(Rule::builder(N::A).non_terminal(N::B).non_terminal(N::C).terminal(T::A).build(|_| N::A))
+            .rule(Rule::builder(N::A).non_terminal(N::C).terminal(T::B).build(|_| N::A))
+            .rule(Rule::builder(N::B).non_terminal(N::C).build(|_| N::B))
+            .rule(Rule::builder(N::B).non_terminal(N::A).build(|_| N::B))
+            .rule(Rule::builder(N::C).build(|_| N::C))
             .build(N::A);
-        assert_eq!(calc_null(&syntax), vec![Symbol::NonTerminal(N::C.enum_index()), Symbol::NonTerminal(N::B.enum_index())].into_iter().collect())
+        assert_eq!(calc_null(&syntax), vec![SymbolInternal::NonTerminal(N::C.enum_index()), SymbolInternal::NonTerminal(N::B.enum_index())].into_iter().collect())
     }
 
     #[test]
@@ -377,18 +402,18 @@ mod tests {
         #[derive(Debug, PartialEq, EnumIndex)]
         enum T { A, B }
         let syntax = Syntax::builder()
-            .rule(Rule::new(N::A).non_terminal(N::B).non_terminal(N::C).terminal(T::A))
-            .rule(Rule::new(N::A).non_terminal(N::C).terminal(T::B))
-            .rule(Rule::new(N::B).non_terminal(N::C))
-            .rule(Rule::new(N::B).non_terminal(N::A))
-            .rule(Rule::new(N::C))
+            .rule(Rule::builder(N::A).non_terminal(N::B).non_terminal(N::C).terminal(T::A).build(|_| N::A))
+            .rule(Rule::builder(N::A).non_terminal(N::C).terminal(T::B).build(|_| N::A))
+            .rule(Rule::builder(N::B).non_terminal(N::C).build(|_| N::B))
+            .rule(Rule::builder(N::B).non_terminal(N::A).build(|_| N::B))
+            .rule(Rule::builder(N::C).build(|_| N::C))
             .build(N::A);
         let first = calc_first(&syntax, &calc_null(&syntax));
-        assert_eq!(first[&Symbol::NonTerminal(N::A.enum_index())], vec![(TerminalSymbol::Symbol(T::A.enum_index())), (TerminalSymbol::Symbol(T::B.enum_index()))].into_iter().collect());
-        assert_eq!(first[&Symbol::NonTerminal(N::B.enum_index())], vec![(TerminalSymbol::Symbol(T::A.enum_index())), (TerminalSymbol::Symbol(T::B.enum_index()))].into_iter().collect());
-        assert_eq!(first[&Symbol::NonTerminal(N::C.enum_index())], vec![].into_iter().collect());
-        assert_eq!(first[&Symbol::Terminal(TerminalSymbol::Symbol(T::A.enum_index()))], vec![(TerminalSymbol::Symbol(T::A.enum_index()))].into_iter().collect());
-        assert_eq!(first[&Symbol::Terminal(TerminalSymbol::Symbol(T::B.enum_index()))], vec![(TerminalSymbol::Symbol(T::B.enum_index()))].into_iter().collect());
+        assert_eq!(first[&SymbolInternal::NonTerminal(N::A.enum_index())], vec![(TerminalSymbol::Symbol(T::A.enum_index())), (TerminalSymbol::Symbol(T::B.enum_index()))].into_iter().collect());
+        assert_eq!(first[&SymbolInternal::NonTerminal(N::B.enum_index())], vec![(TerminalSymbol::Symbol(T::A.enum_index())), (TerminalSymbol::Symbol(T::B.enum_index()))].into_iter().collect());
+        assert_eq!(first[&SymbolInternal::NonTerminal(N::C.enum_index())], vec![].into_iter().collect());
+        assert_eq!(first[&SymbolInternal::Terminal(TerminalSymbol::Symbol(T::A.enum_index()))], vec![(TerminalSymbol::Symbol(T::A.enum_index()))].into_iter().collect());
+        assert_eq!(first[&SymbolInternal::Terminal(TerminalSymbol::Symbol(T::B.enum_index()))], vec![(TerminalSymbol::Symbol(T::B.enum_index()))].into_iter().collect());
     }
 
     #[test]
@@ -400,15 +425,15 @@ mod tests {
         use NonTerminal::*;
         use Terminal::*;
         let mut syntax = Syntax::builder()
-            .rule(Rule::new(E).non_terminal(E).terminal(Plus).non_terminal(T))
-            .rule(Rule::new(E).non_terminal(T))
-            .rule(Rule::new(T).non_terminal(T).terminal(Star).non_terminal(F))
-            .rule(Rule::new(T).non_terminal(F))
-            .rule(Rule::new(F).terminal(Bracket).non_terminal(E).terminal(CloseBracket))
-            .rule(Rule::new(F).terminal(I))
+            .rule(Rule::builder(E).non_terminal(E).terminal(Plus).non_terminal(T).build(|_| E))
+            .rule(Rule::builder(E).non_terminal(T).build(|_| E))
+            .rule(Rule::builder(T).non_terminal(T).terminal(Star).non_terminal(F).build(|_| T))
+            .rule(Rule::builder(T).non_terminal(F).build(|_| T))
+            .rule(Rule::builder(F).terminal(Bracket).non_terminal(E).terminal(CloseBracket).build(|_| F))
+            .rule(Rule::builder(F).terminal(I).build(|_| F))
             .build(E);
-        let start_rule = Rule::new_raw(3).non_terminal(E);
-        syntax.rules.push(start_rule.clone());
+        let start_rule = Rc::new(Rule::builder_raw(3).non_terminal(E).build(|_| unreachable!()));
+        syntax.rules.push(Rc::clone(&start_rule));
         let mut start_state = vec![LR1Item {
             rule: start_rule.clone(),
             position: 0,
@@ -509,12 +534,12 @@ mod tests {
         #[derive(Debug, PartialEq, EnumIndex)]
         enum T { A, B, C }
         let syntax = Syntax::builder()
-            .rule(Rule::new(N::A).non_terminal(N::B).non_terminal(N::C).terminal(T::A))
-            .rule(Rule::new(N::A).non_terminal(N::C).terminal(T::B))
-            .rule(Rule::new(N::B).non_terminal(N::C))
-            .rule(Rule::new(N::B).non_terminal(N::A))
-            .rule(Rule::new(N::C).terminal(T::C))
-            .rule(Rule::new(N::C))
+            .rule(Rule::builder(N::A).non_terminal(N::B).non_terminal(N::C).terminal(T::A).build(|_| N::A))
+            .rule(Rule::builder(N::A).non_terminal(N::C).terminal(T::B).build(|_| N::A))
+            .rule(Rule::builder(N::B).non_terminal(N::C).build(|_| N::B))
+            .rule(Rule::builder(N::B).non_terminal(N::A).build(|_| N::B))
+            .rule(Rule::builder(N::C).terminal(T::C).build(|_| N::C))
+            .rule(Rule::builder(N::C).build(|_| N::C))
             .build(N::A);
         let null = calc_null(&syntax);
         let first = calc_first(&syntax, &null);
@@ -610,12 +635,12 @@ mod tests {
         #[derive(Debug, PartialEq, EnumIndex)]
         enum T { A, B, C }
         let syntax = Syntax::builder()
-            .rule(Rule::new(N::A).non_terminal(N::B).non_terminal(N::C).terminal(T::A))
-            .rule(Rule::new(N::A).non_terminal(N::C).terminal(T::B))
-            .rule(Rule::new(N::B).non_terminal(N::C))
-            .rule(Rule::new(N::B).non_terminal(N::A))
-            .rule(Rule::new(N::C).terminal(T::C))
-            .rule(Rule::new(N::C))
+            .rule(Rule::builder(N::A).non_terminal(N::B).non_terminal(N::C).terminal(T::A).build(|_| N::A))
+            .rule(Rule::builder(N::A).non_terminal(N::C).terminal(T::B).build(|_| N::A))
+            .rule(Rule::builder(N::B).non_terminal(N::C).build(|_| N::B))
+            .rule(Rule::builder(N::B).non_terminal(N::A).build(|_| N::B))
+            .rule(Rule::builder(N::C).terminal(T::C).build(|_| N::C))
+            .rule(Rule::builder(N::C).build(|_| N::C))
             .build(N::A);
         let null = calc_null(&syntax);
         let first = calc_first(&syntax, &null);
@@ -630,7 +655,7 @@ mod tests {
         };
         let goto = calc_goto(&closure, &syntax, &null, &first);
         assert_eq!(goto, vec![
-            (Symbol::Terminal(TerminalSymbol::Symbol(T::C.enum_index())),
+            (SymbolInternal::Terminal(TerminalSymbol::Symbol(T::C.enum_index())),
              vec![
                  LR1Item {
                      rule: syntax.rules[4].clone(),
@@ -649,7 +674,7 @@ mod tests {
                  },
              ].into_iter().collect()
             ),
-            (Symbol::NonTerminal(N::A.enum_index()),
+            (SymbolInternal::NonTerminal(N::A.enum_index()),
              vec![
                  LR1Item {
                      rule: syntax.rules[3].clone(),
@@ -662,7 +687,7 @@ mod tests {
                      lookahead_symbol: TerminalSymbol::Symbol(T::C.enum_index()),
                  },
              ].into_iter().collect()),
-            (Symbol::NonTerminal(N::B.enum_index()),
+            (SymbolInternal::NonTerminal(N::B.enum_index()),
              vec![
                  LR1Item {
                      rule: syntax.rules[0].clone(),
@@ -690,7 +715,7 @@ mod tests {
                      lookahead_symbol: TerminalSymbol::Symbol(T::A.enum_index()),
                  },
              ].into_iter().collect()),
-            (Symbol::NonTerminal(N::C.enum_index()),
+            (SymbolInternal::NonTerminal(N::C.enum_index()),
              vec![
                  LR1Item {
                      rule: syntax.rules[1].clone(),
@@ -791,12 +816,12 @@ mod tests {
         use NonTerminal::*;
         use Terminal::*;
         let syntax = Syntax::builder()
-            .rule(/* 0:E->E+T */Rule::new(E).non_terminal(E).terminal(Plus).non_terminal(T))
-            .rule(/* 1:E->T   */Rule::new(E).non_terminal(T))
-            .rule(/* 2:T->T*F */Rule::new(T).non_terminal(T).terminal(Star).non_terminal(F))
-            .rule(/* 3:T->F   */Rule::new(T).non_terminal(F))
-            .rule(/* 4:F->(E) */Rule::new(F).terminal(Bracket).non_terminal(E).terminal(CloseBracket))
-            .rule(/* 5:F->i   */Rule::new(F).terminal(I))
+            .rule(/* 0:E->E+T */Rule::builder(E).non_terminal(E).terminal(Plus).non_terminal(T).build(|_| E))
+            .rule(/* 1:E->T   */Rule::builder(E).non_terminal(T).build(|_| E))
+            .rule(/* 2:T->T*F */Rule::builder(T).non_terminal(T).terminal(Star).non_terminal(F).build(|_| T))
+            .rule(/* 3:T->F   */Rule::builder(T).non_terminal(F).build(|_| T))
+            .rule(/* 4:F->(E) */Rule::builder(F).terminal(Bracket).non_terminal(E).terminal(CloseBracket).build(|_| F))
+            .rule(/* 5:F->i   */Rule::builder(F).terminal(I).build(|_| F))
             /*       6:E'->E  */
             .build(E);
         let expect = Parser {
@@ -1070,6 +1095,257 @@ mod tests {
                         (F.enum_index(), 20),
                     ].into_iter().collect()
                 ),
+            ].into_iter().collect(),
+            error_rules: HashMap::new(),
+            start: 0,
+        };
+        let (parser, _warning) = Parser::new(syntax);
+        assert!(parser_isomorphisms(&parser, &expect));
+
+        let syntax = Syntax::builder()
+            .rule(/* 0:E->E+T     */Rule::builder(E).non_terminal(E).terminal(Plus).non_terminal(T).build(|_| E))
+            .rule(/* 1:E->T       */Rule::builder(E).non_terminal(T).build(|_| E))
+            .rule(/* 2:T->i       */Rule::builder(T).terminal(I).build(|_| T))
+            .rule(/* 3:T->(E)     */Rule::builder(T).terminal(Bracket).non_terminal(E).terminal(CloseBracket).build(|_| T))
+            .rule(/* 4:T->(error) */Rule::builder(T).terminal(Bracket).error().terminal(CloseBracket).build(|_| T))
+            /*       5:E'->E      */
+            .build(E);
+        let expect = Parser {
+            action_table: vec![
+                // 0:closure([E'->.E,$])=[E'->.E,$],[E->.E+T,$+],[E->.T,$+],[T->.i,$+],[T->.(E),$+],[T->.(error),$+]
+                //      Action: (=>s1,i=>s2
+                //      Goto:   E=>3,T=>4
+                (
+                    0,
+                    vec![
+                        (TerminalSymbol::Symbol(Bracket.enum_index()), Action::Shift(1)),
+                        (TerminalSymbol::Symbol(I.enum_index()), Action::Shift(2)),
+                    ].into_iter().collect()
+                ),
+                // 1:closure([T->(.E),$+],[T->(.error),$+])=[T->(.E),$+],[T->(.error),$+],[E->.E+T,)+],[E->.T,)+],[T->.i,)+],[T->.(E),)+],[T->.(error),)+]
+                //      Action: (=>s5,i=>s6,error=>s7
+                //      Goto:   E=>8,T=>9
+                (
+                    1,
+                    vec![
+                        (TerminalSymbol::Symbol(Bracket.enum_index()), Action::Shift(5)),
+                        (TerminalSymbol::Symbol(I.enum_index()), Action::Shift(6)),
+                        (TerminalSymbol::Error, Action::Shift(7)),
+                    ].into_iter().collect()
+                ),
+                // 2:closure([T->i.,$+])=[T->i.,$+]
+                //      Action: $+=>r2
+                (
+                    2,
+                    vec![
+                        (TerminalSymbol::Symbol(Plus.enum_index()), Action::Reduce(syntax.rules[2].clone())),
+                        (TerminalSymbol::EOI, Action::Reduce(syntax.rules[2].clone())),
+                    ].into_iter().collect()
+                ),
+                // 3:closure([E'->E.,$],[E->E.+T,$+])=[E'->E.,$],[E->E.+T,$+]
+                //      Action: $=>accept,+=>s10
+                (
+                    3,
+                    vec![
+                        (TerminalSymbol::Symbol(Plus.enum_index()), Action::Shift(10)),
+                        (TerminalSymbol::EOI, Action::Accept),
+                    ].into_iter().collect()
+                ),
+                // 4:closure([E->T.,$+])=[E->T.,$+]
+                //      Action: $+=>r1
+                (
+                    4,
+                    vec![
+                        (TerminalSymbol::Symbol(Plus.enum_index()), Action::Reduce(syntax.rules[1].clone())),
+                        (TerminalSymbol::EOI, Action::Reduce(syntax.rules[1].clone())),
+                    ].into_iter().collect()
+                ),
+                // 5:closure([T->(.E),)+],[T->(.error),)+])=[T->(.E),)+],[T->(.error),)+],[E->.E+T,)+],[E->.T,)+],[T->.i,)+],[T->.(E),)+],[T->.(error),)+]
+                //      Action: (=>s5,i=>s6,error=>s11
+                //      Goto:   E=>12,T=>9
+                (
+                    5,
+                    vec![
+                        (TerminalSymbol::Symbol(Bracket.enum_index()), Action::Shift(5)),
+                        (TerminalSymbol::Symbol(I.enum_index()), Action::Shift(6)),
+                        (TerminalSymbol::Error, Action::Shift(11)),
+                    ].into_iter().collect()
+                ),
+                // 6:closure([T->i.,)+])=[T->i.,)+]
+                //      Action: )+=>r2
+                (
+                    6,
+                    vec![
+                        (TerminalSymbol::Symbol(CloseBracket.enum_index()), Action::Reduce(syntax.rules[2].clone())),
+                        (TerminalSymbol::Symbol(Plus.enum_index()), Action::Reduce(syntax.rules[2].clone())),
+                    ].into_iter().collect()
+                ),
+                // 7:closure([T->(error.),$+])=[T->(error.),$+]
+                //      Action: )=>s13
+                (
+                    7,
+                    vec![
+                        (TerminalSymbol::Symbol(CloseBracket.enum_index()), Action::Shift(13)),
+                    ].into_iter().collect()
+                ),
+                // 8:closure([T->(E.),$+],[E->E.+T,)+])=[T->(E.),$+],[E->E.+T,)+]
+                //      Action: )=>s14,+=>s15
+                (
+                    8,
+                    vec![
+                        (TerminalSymbol::Symbol(CloseBracket.enum_index()), Action::Shift(14)),
+                        (TerminalSymbol::Symbol(Plus.enum_index()), Action::Shift(15)),
+                    ].into_iter().collect()
+                ),
+                // 9:closure([E->T.,)+])=[E->T.,)+]
+                //      Action: )+=>r1
+                (
+                    9,
+                    vec![
+                        (TerminalSymbol::Symbol(CloseBracket.enum_index()), Action::Reduce(syntax.rules[1].clone())),
+                        (TerminalSymbol::Symbol(Plus.enum_index()), Action::Reduce(syntax.rules[1].clone())),
+                    ].into_iter().collect()
+                ),
+                //10:closure([E->E+.T,$+])=[E->E+.T,$+],[T->.i,$+],[T->.(E),$+],[T->.(error),$+]
+                //      Action: (=>s1,i=>s2
+                //      Goto:   T=>16
+                (
+                    10,
+                    vec![
+                        (TerminalSymbol::Symbol(Bracket.enum_index()), Action::Shift(1)),
+                        (TerminalSymbol::Symbol(I.enum_index()), Action::Shift(2)),
+                    ].into_iter().collect()
+                ),
+                //11:closure([T->(error.),)+])=[T->(error.),)+]
+                //      Action: )=>s17
+                (
+                    11,
+                    vec![
+                        (TerminalSymbol::Symbol(CloseBracket.enum_index()), Action::Shift(17)),
+                    ].into_iter().collect()
+                ),
+                //12:closure([T->(E.),)+],[E->E.+T,)+])=[T->(E.),)+],[E->E.+T,)+]
+                //      Action: )=>s18,+=>s15
+                (
+                    12,
+                    vec![
+                        (TerminalSymbol::Symbol(CloseBracket.enum_index()), Action::Shift(18)),
+                        (TerminalSymbol::Symbol(Plus.enum_index()), Action::Shift(15)),
+                    ].into_iter().collect()
+                ),
+                //13:closure([T->(error).,$+])=[T->(error).,$+]
+                //      Action: $+=>r4
+                (
+                    13,
+                    vec![
+                        (TerminalSymbol::Symbol(Plus.enum_index()), Action::Reduce(syntax.rules[4].clone())),
+                        (TerminalSymbol::EOI, Action::Reduce(syntax.rules[4].clone())),
+                    ].into_iter().collect()
+                ),
+                //14:closure([T->(E).,$+])=[T->(E).,$+]
+                //      Action: $+=>r3
+                (
+                    14,
+                    vec![
+                        (TerminalSymbol::Symbol(Plus.enum_index()), Action::Reduce(syntax.rules[3].clone())),
+                        (TerminalSymbol::EOI, Action::Reduce(syntax.rules[3].clone())),
+                    ].into_iter().collect()
+                ),
+                //15:closure([E->E+.T,)+])=[E->E+.T,)+],[T->.i,)+],[T->.(E),)+],[T->.(error),)+]
+                //      Action: (=>s5,i=>s6
+                //      Goto:   T=>19
+                (
+                    15,
+                    vec![
+                        (TerminalSymbol::Symbol(Bracket.enum_index()), Action::Shift(5)),
+                        (TerminalSymbol::Symbol(I.enum_index()), Action::Shift(6)),
+                    ].into_iter().collect()
+                ),
+                //16:closure([E->E+T.,$+])=[E->E+T.,$+]
+                //      Action: $+=>r0
+                (
+                    16,
+                    vec![
+                        (TerminalSymbol::Symbol(Plus.enum_index()), Action::Reduce(syntax.rules[0].clone())),
+                        (TerminalSymbol::EOI, Action::Reduce(syntax.rules[0].clone())),
+                    ].into_iter().collect()
+                ),
+                //17:closure([T->(error).,)+])=[T->(error).,)+]
+                //      Action: )+=>r4
+                (
+                    17,
+                    vec![
+                        (TerminalSymbol::Symbol(CloseBracket.enum_index()), Action::Reduce(syntax.rules[4].clone())),
+                        (TerminalSymbol::Symbol(Plus.enum_index()), Action::Reduce(syntax.rules[4].clone())),
+                    ].into_iter().collect()
+                ),
+                //18:closure([T->(E).,)+])=[T->(E).,)+]
+                //      Action: )+=>r3
+                (
+                    18,
+                    vec![
+                        (TerminalSymbol::Symbol(CloseBracket.enum_index()), Action::Reduce(syntax.rules[3].clone())),
+                        (TerminalSymbol::Symbol(Plus.enum_index()), Action::Reduce(syntax.rules[3].clone())),
+                    ].into_iter().collect()
+                ),
+                //19:closure([E->E+T.,)+])=[E->E+T.,)+]
+                //      Action: )+=>r0
+                (
+                    19,
+                    vec![
+                        (TerminalSymbol::Symbol(CloseBracket.enum_index()), Action::Reduce(syntax.rules[0].clone())),
+                        (TerminalSymbol::Symbol(Plus.enum_index()), Action::Reduce(syntax.rules[0].clone())),
+                    ].into_iter().collect()
+                ),
+            ].into_iter().collect(),
+            goto_table: vec![
+                (
+                    0,
+                    vec![
+                        (E.enum_index(), 3),
+                        (T.enum_index(), 4),
+                    ].into_iter().collect()
+                ),
+                (
+                    1,
+                    vec![
+                        (E.enum_index(), 8),
+                        (T.enum_index(), 9),
+                    ].into_iter().collect()
+                ),
+                (
+                    5,
+                    vec![
+                        (E.enum_index(), 12),
+                        (T.enum_index(), 9),
+                    ].into_iter().collect()
+                ),
+                (
+                    10,
+                    vec![
+                        (T.enum_index(), 16),
+                    ].into_iter().collect()
+                ),
+                (
+                    15,
+                    vec![
+                        (T.enum_index(), 19),
+                    ].into_iter().collect()
+                ),
+            ].into_iter().collect(),
+            error_rules: vec![
+                (
+                    1,
+                    vec![
+                        syntax.rules[4].clone()
+                    ].into_iter().collect()
+                ),
+                (
+                    5,
+                    vec![
+                        syntax.rules[4].clone()
+                    ].into_iter().collect()
+                )
             ].into_iter().collect(),
             start: 0,
         };
