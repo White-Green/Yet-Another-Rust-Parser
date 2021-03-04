@@ -2,6 +2,7 @@
 !/.gitignore
 !/tokenizer
 !/parser
+!/example
 !/Cargo.toml
 !/README.md
 !/LICENSE
