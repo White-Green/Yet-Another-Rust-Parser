@@ -50,25 +50,24 @@ impl<'a> TokenizerDFANode<'a> {
         Default::default()
     }
 
-    fn reference(&self) -> TokenizerDFANodeRef<'a> {
+    pub(crate) fn reference(&self) -> TokenizerDFANodeRef<'a> {
         TokenizerDFANodeRef::new(self as *const Self)
     }
 
-    pub(crate) fn next(&self, item: char) -> Option<TokenizerDFANodeRef<'a>> {
-        let item = item as u32;
-        self.next.range(..=item).next_back().and_then(|(range, node_ref)| if item < range.range.end { Some(node_ref.clone()) } else { None })
+    pub(crate) fn next_map(&self) -> &BTreeMap<CharRange, TokenizerDFANodeRef<'a>> {
+        &self.next
     }
 }
 
 pub(crate) struct TokenizerDFA<'a> {
-    node: Vec<Pin<Box<TokenizerDFANode<'a>>>>,
-    begin: TokenizerDFANodeRef<'a>,
-    end: HashMap<TokenizerDFANodeRef<'a>, usize>,
+    pub(crate) node: Vec<Pin<Box<TokenizerDFANode<'a>>>>,
+    pub(crate) begin: TokenizerDFANodeRef<'a>,
+    pub(crate) end: HashMap<TokenizerDFANodeRef<'a>, usize>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum DFAConstructWarning {
-    EndIsBatting(usize, usize)
+    EndConflict(usize, usize)
 }
 
 impl<'a, 'b> From<TokenizerNFA<'a>> for (TokenizerDFA<'b>, Vec<DFAConstructWarning>) {
@@ -127,7 +126,7 @@ impl<'a, 'b> From<TokenizerNFA<'a>> for (TokenizerDFA<'b>, Vec<DFAConstructWarni
                 .rev() {
                 if set.contains(&nfa_node) {
                     if let Some(old) = end.insert(node[index].reference(), i) {
-                        warnings.push(DFAConstructWarning::EndIsBatting(old, i));
+                        warnings.push(DFAConstructWarning::EndConflict(old, i));
                     }
                 }
             }
@@ -137,14 +136,6 @@ impl<'a, 'b> From<TokenizerNFA<'a>> for (TokenizerDFA<'b>, Vec<DFAConstructWarni
 }
 
 impl<'a> TokenizerDFA<'a> {
-    pub(crate) fn begin(&self) -> TokenizerDFANodeRef {
-        self.begin.clone()
-    }
-
-    pub(crate) fn accept_index(&self, node_ref: &TokenizerDFANodeRef) -> Option<usize> {
-        self.end.get(node_ref).copied()
-    }
-
     pub(crate) fn minify<'b>(self) -> TokenizerDFA<'b> {
         let mut group_map = self.node.iter()
             .map(|node| {
@@ -477,7 +468,7 @@ mod tests {
             Hir::class(Class::Unicode(ClassUnicode::new(vec![ClassUnicodeRange::new('c', 'f')])))]).unwrap();
         let (dfa, warnings): (TokenizerDFA, Vec<_>) = nfa.into();
         assert!(tokenizer_dfa_index_isomorphisms(&tokenizer_dfa_to_index(&dfa), &(vec![seq![(CharRange{range: 'a' as u32..'a' as u32 + 1 },1),(CharRange{range: 'b' as u32..'b' as u32 + 1},2),(CharRange{range: 'c' as u32..'c' as u32 + 1},3),(CharRange{range: 'd' as u32..'f' as u32 + 1},4)], seq![], seq![], seq![], seq![]], 0, seq![(1,0),(2,1),(3,1),(4,2)])));
-        assert_eq!(HashSet::<DFAConstructWarning>::from_iter(warnings.into_iter()), seq![DFAConstructWarning::EndIsBatting(1, 0), DFAConstructWarning::EndIsBatting(2, 1)]);
+        assert_eq!(HashSet::<DFAConstructWarning>::from_iter(warnings.into_iter()), seq![DFAConstructWarning::EndConflict(1, 0), DFAConstructWarning::EndConflict(2, 1)]);
         assert!(tokenizer_dfa_index_isomorphisms(&tokenizer_dfa_to_index(&dfa.minify()), &(vec![seq![(CharRange{range: 'a' as u32..'a' as u32 + 1 },1),(CharRange{range: 'b' as u32..'c' as u32 + 1 },2),(CharRange{range: 'd' as u32..'f' as u32 + 1 },3)], seq![], seq![], seq![]], 0, seq![(1,0),(2,1),(3,2)])));
 
         let nfa = TokenizerNFA::try_from(vec!["([a-zA-Z]{2})*"]).unwrap();

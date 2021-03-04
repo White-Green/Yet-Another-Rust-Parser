@@ -1,7 +1,9 @@
 use std::collections::{HashSet, VecDeque};
 
-use crate::{EnumIndex, Symbol};
-use crate::parser::{Action, Parser, SymbolInternal};
+use enum_index::EnumIndex;
+
+use crate::parser::{Action, LR1Parser, SymbolInternal};
+use crate::Symbol;
 use crate::syntax::TerminalSymbol;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -10,12 +12,12 @@ pub enum ParseError {
 }
 
 pub trait Parse<N>: Iterator {
-    fn parse(self, parser: Parser<N, Self::Item>) -> Result<N, ParseError>;
+    fn parse(self, parser: &LR1Parser<N, Self::Item>) -> Result<N, ParseError>;
 }
 
 impl<I: Iterator, N> Parse<N> for I
     where I::Item: EnumIndex {
-    fn parse(mut self, parser: Parser<N, Self::Item>) -> Result<N, ParseError> {
+    fn parse(mut self, parser: &LR1Parser<N, Self::Item>) -> Result<N, ParseError> {
         let mut current_state = parser.start;
         let mut symbols = Vec::new();
         let mut buffer = VecDeque::new();
@@ -129,10 +131,12 @@ impl<I: Iterator, N> Parse<N> for I
 
 #[cfg(test)]
 mod tests {
+    use enum_index_derive::*;
+
     use crate::{Rule, Syntax};
     use crate::*;
     use crate::iter::{Parse, ParseError};
-    use crate::parser::Parser;
+    use crate::parser::LR1Parser;
 
     #[test]
     fn parse() {
@@ -152,7 +156,7 @@ mod tests {
         use Terminal::*;
         use NonTerminal::*;
 
-        let (parser, _) = Parser::new(Syntax::builder()
+        let (parser, _) = LR1Parser::new(Syntax::builder()
             .rule(Rule::new(
                 E(Vec::new()),
                 &[Symbol::NonTerminal(E(Vec::new())), Symbol::Terminal(Plus), Symbol::NonTerminal(T(Vec::new()))],
@@ -194,7 +198,7 @@ mod tests {
                     } else { unreachable!() }))
             .build(E(Vec::new()))
         );
-        assert_eq!(vec![Number(1), Plus, Number(2), Star, Number(3), Plus, Number(4)].into_iter().parse(parser),
+        assert_eq!(vec![Number(1), Plus, Number(2), Star, Number(3), Plus, Number(4)].into_iter().parse(&parser),
                    Ok(E(vec![
                        T(vec![F(Number(1))]),
                        T(vec![F(Number(2)), F(Number(3))]),
@@ -216,7 +220,7 @@ mod tests {
         }
         use NonTerminal::*;
         use Terminal::*;
-        let parser = || Parser::from(Syntax::builder()
+        let parser = LR1Parser::from(Syntax::builder()
             .rule(Rule::new(
                 Add(Vec::new()),
                 &[Symbol::NonTerminal(Add(Vec::new())), Symbol::Terminal(Plus), Symbol::NonTerminal(Prod(Vec::new()))],
@@ -286,7 +290,7 @@ mod tests {
                     } else { unreachable!() }))
             .build(Add(Vec::new())));
 
-        assert_eq!(vec![I(1), Plus, I(2), Star, Bracket, I(3), Plus, I(4), CloseBracket].into_iter().parse(parser()),
+        assert_eq!(vec![I(1), Plus, I(2), Star, Bracket, I(3), Plus, I(4), CloseBracket].into_iter().parse(&parser),
                    Ok(
                        Add(vec![
                            Prod(vec![Item(Union::Number(1))]),
@@ -301,7 +305,7 @@ mod tests {
                            ]),
                        ]),
                    ));
-        assert_eq!(vec![I(1), Plus, I(2), Star, Bracket, I(3), CloseBracket].into_iter().parse(parser()),
+        assert_eq!(vec![I(1), Plus, I(2), Star, Bracket, I(3), CloseBracket].into_iter().parse(&parser),
                    Ok(
                        Add(vec![
                            Prod(vec![
@@ -314,7 +318,7 @@ mod tests {
                            ])
                        ])
                    ));
-        assert_eq!(vec![I(1), Plus, I(2), Star, Bracket, I(3), I(4), CloseBracket].into_iter().parse(parser()),
+        assert_eq!(vec![I(1), Plus, I(2), Star, Bracket, I(3), I(4), CloseBracket].into_iter().parse(&parser),
                    Ok(
                        Add(vec![
                            Prod(vec![Item(Union::Number(1))]),
@@ -324,7 +328,7 @@ mod tests {
                            ])
                        ])
                    ));
-        assert_eq!(vec![I(1), Plus, Bracket, I(2), I(3), CloseBracket, Star, I(4)].into_iter().parse(parser()),
+        assert_eq!(vec![I(1), Plus, Bracket, I(2), I(3), CloseBracket, Star, I(4)].into_iter().parse(&parser),
                    Ok(
                        Add(vec![
                            Prod(vec![Item(Union::Number(1))]),
@@ -334,7 +338,7 @@ mod tests {
                            ])
                        ])
                    ));
-        assert_eq!(vec![Plus, I(2), Star, Bracket, I(3), CloseBracket].into_iter().parse(parser()),
+        assert_eq!(vec![Plus, I(2), Star, Bracket, I(3), CloseBracket].into_iter().parse(&parser),
                    Ok(
                        Add(vec![
                            Item(Union::Error),
@@ -344,7 +348,7 @@ mod tests {
                            ])
                        ])
                    ));
-        assert_eq!(vec![I(1), Plus, I(2), Star, Bracket, I(3)].into_iter().parse(parser()),
+        assert_eq!(vec![I(1), Plus, I(2), Star, Bracket, I(3)].into_iter().parse(&parser),
                    Err(ParseError::SyntaxError));
     }
 }

@@ -5,8 +5,10 @@ use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;
 use std::rc::Rc;
 
-use crate::{EnumIndex, Symbol};
+use enum_index::EnumIndex;
+
 use crate::parser::SymbolInternal;
+use crate::Symbol;
 
 #[derive(Debug, PartialEq)]
 pub struct Syntax<N, T> {
@@ -176,7 +178,8 @@ impl<N: EnumIndex, T: EnumIndex> RuleBuilder<N, T> {
 
 #[cfg(test)]
 mod tests {
-    use crate::EnumIndex;
+    use enum_index_derive::*;
+
     use crate::parser::SymbolInternal;
     use crate::syntax::{Rule, Syntax, TerminalSymbol};
 

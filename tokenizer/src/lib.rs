@@ -1,15 +1,15 @@
 use std::borrow::Borrow;
 use std::cmp::Ordering;
-use std::ops::Range;
-use std::fmt::Debug;
 use std::convert::TryFrom;
+use std::fmt::Debug;
+use std::ops::Range;
+
+pub use crate::tokenizer::DFATokenizer;
+pub use crate::tokenizer::iter::{Tokenize, TokenizeIterator};
 
 mod nfa;
 mod dfa;
 mod tokenizer;
-
-pub use crate::tokenizer::Tokenizer;
-pub use crate::tokenizer::iter::TokenizeIterator;
 
 #[derive(Eq, Hash, Clone)]
 struct CharRange {

@@ -288,14 +288,14 @@ fn calc_error_rules<N, T>(state_index: &HashMap<StateInterop<N, T>, usize>) -> H
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct Parser<N, T> {
+pub struct LR1Parser<N, T> {
     pub(crate) action_table: HashMap<usize, HashMap<TerminalSymbol<usize>, Action<usize, Rc<Rule<N, T>>>>>,
     pub(crate) goto_table: HashMap<usize, HashMap<usize, usize>>,
     pub(crate) error_rules: HashMap<usize, HashSet<Rc<Rule<N, T>>>>,
     pub(crate) start: usize,
 }
 
-impl<N: EnumIndex, T: EnumIndex> Parser<N, T> {
+impl<N: EnumIndex, T: EnumIndex> LR1Parser<N, T> {
     pub fn new(mut syntax: Syntax<N, T>) -> (Self, Vec<CalcTableWarning<usize, N, T>>) {
         let start_symbol = {
             let mut non_terminal_symbols = BTreeSet::new();
@@ -359,11 +359,11 @@ impl<N: EnumIndex, T: EnumIndex> Parser<N, T> {
             .collect();
         action_table.shrink_to_fit();
         goto_table.shrink_to_fit();
-        (Parser { action_table, goto_table, error_rules: calc_error_rules(&state_index), start: *state_index.get(&start_state).unwrap() }, warnings)
+        (LR1Parser { action_table, goto_table, error_rules: calc_error_rules(&state_index), start: *state_index.get(&start_state).unwrap() }, warnings)
     }
 }
 
-impl<N: EnumIndex, T: EnumIndex> From<Syntax<N, T>> for Parser<N, T> {
+impl<N: EnumIndex, T: EnumIndex> From<Syntax<N, T>> for LR1Parser<N, T> {
     fn from(syntax: Syntax<N, T>) -> Self {
         Self::new(syntax).0
     }
@@ -375,8 +375,11 @@ mod tests {
     use std::fmt::Debug;
     use std::rc::Rc;
 
-    use crate::{EnumIndex, Rule, Syntax};
-    use crate::parser::{Action, calc_closure, calc_first, calc_goto, calc_null, LR1Item, Parser, SymbolInternal};
+    use enum_index::EnumIndex;
+    use enum_index_derive::*;
+
+    use crate::{Rule, Syntax};
+    use crate::parser::{Action, calc_closure, calc_first, calc_goto, calc_null, LR1Item, LR1Parser, SymbolInternal};
     use crate::syntax::TerminalSymbol;
 
     #[test]
@@ -741,7 +744,7 @@ mod tests {
         ].into_iter().collect());
     }
 
-    fn parser_isomorphisms<N, T>(parser_a: &Parser<N, T>, parser_b: &Parser<N, T>) -> bool {
+    fn parser_isomorphisms<N, T>(parser_a: &LR1Parser<N, T>, parser_b: &LR1Parser<N, T>) -> bool {
         let mut map = HashMap::new();
         map.insert(parser_a.start, parser_b.start);
         let mut q = VecDeque::new();
@@ -824,7 +827,7 @@ mod tests {
             .rule(/* 5:F->i   */Rule::builder(F).terminal(I).build(|_| F))
             /*       6:E'->E  */
             .build(E);
-        let expect = Parser {
+        let expect = LR1Parser {
             action_table: vec![
                 // 0:closure([E'->.E,$])=[E'->.E,$],[E->.E+T,$+],[E->.T,$+],[T->.T*F,$+*],[T->.F,$+*],[F->.(E),$+*],[F->.i,$+*]
                 //      Action: (=>s4,i=>s5
@@ -1099,7 +1102,7 @@ mod tests {
             error_rules: HashMap::new(),
             start: 0,
         };
-        let (parser, _warning) = Parser::new(syntax);
+        let (parser, _warning) = LR1Parser::new(syntax);
         assert!(parser_isomorphisms(&parser, &expect));
 
         let syntax = Syntax::builder()
@@ -1110,7 +1113,7 @@ mod tests {
             .rule(/* 4:T->(error) */Rule::builder(T).terminal(Bracket).error().terminal(CloseBracket).build(|_| T))
             /*       5:E'->E      */
             .build(E);
-        let expect = Parser {
+        let expect = LR1Parser {
             action_table: vec![
                 // 0:closure([E'->.E,$])=[E'->.E,$],[E->.E+T,$+],[E->.T,$+],[T->.i,$+],[T->.(E),$+],[T->.(error),$+]
                 //      Action: (=>s1,i=>s2
@@ -1349,7 +1352,7 @@ mod tests {
             ].into_iter().collect(),
             start: 0,
         };
-        let (parser, _warning) = Parser::new(syntax);
+        let (parser, _warning) = LR1Parser::new(syntax);
         assert!(parser_isomorphisms(&parser, &expect));
     }
 }

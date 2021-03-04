@@ -1,23 +1,31 @@
 use std::collections::VecDeque;
 use std::ops::Deref;
 
-use crate::tokenizer::Tokenizer;
+pub trait Tokenizer {
+    type Input;
+    type Output;
+    fn begin(&self) -> usize;
+    fn accept_index(&self, node: usize) -> Option<usize>;
+    fn next_node(&self, node: usize, token: char) -> Option<usize>;
+    fn enum_maker(&self, pattern: usize) -> &dyn Fn(&str, Vec<Self::Input>) -> Self::Output;
+}
 
-pub struct TokenizeIterator<'a, I: Iterator, E, F>
-    where F: FnMut(&I::Item) -> char {
+pub struct TokenizeIterator<I: Iterator, F, T>
+    where F: FnMut(&I::Item) -> char,
+          T: Tokenizer<Input=I::Item> {
     iter: I,
     queue: VecDeque<I::Item>,
     map: F,
-    tokenizer: Tokenizer<'a, E, I::Item>,
+    tokenizer: T,
 }
 
-pub trait Tokenize<E>: Sized + Iterator {
-    fn tokenize(self, tokenizer: Tokenizer<E, Self::Item>) -> TokenizeIterator<Self, E, fn(&char) -> char> where Self: Iterator<Item=char>;
-    fn tokenize_with<F: FnMut(&Self::Item) -> char>(self, tokenizer: Tokenizer<E, Self::Item>, map: F) -> TokenizeIterator<Self, E, F>;
+pub trait Tokenize: Sized + Iterator {
+    fn tokenize<T: Tokenizer<Input=Self::Item>>(self, tokenizer: T) -> TokenizeIterator<Self, fn(&char) -> char, T> where Self: Iterator<Item=char>;
+    fn tokenize_with<T: Tokenizer<Input=Self::Item>, F: FnMut(&Self::Item) -> char>(self, tokenizer: T, map: F) -> TokenizeIterator<Self, F, T>;
 }
 
-impl<I: Iterator, E> Tokenize<E> for I {
-    fn tokenize(self, tokenizer: Tokenizer<E, I::Item>) -> TokenizeIterator<Self, E, fn(&char) -> char> where Self: Iterator<Item=char> {
+impl<I: Iterator> Tokenize for I {
+    fn tokenize<T: Tokenizer<Input=Self::Item>>(self, tokenizer: T) -> TokenizeIterator<Self, fn(&char) -> char, T> where Self: Iterator<Item=char> {
         TokenizeIterator {
             iter: self,
             queue: VecDeque::new(),
@@ -26,7 +34,7 @@ impl<I: Iterator, E> Tokenize<E> for I {
         }
     }
 
-    fn tokenize_with<F: FnMut(&Self::Item) -> char>(self, tokenizer: Tokenizer<E, Self::Item>, map: F) -> TokenizeIterator<Self, E, F> {
+    fn tokenize_with<T: Tokenizer<Input=Self::Item>, F: FnMut(&Self::Item) -> char>(self, tokenizer: T, map: F) -> TokenizeIterator<Self, F, T> {
         TokenizeIterator {
             iter: self,
             queue: VecDeque::new(),
@@ -36,13 +44,13 @@ impl<I: Iterator, E> Tokenize<E> for I {
     }
 }
 
-impl<'a, I: Iterator, E, F: FnMut(&I::Item) -> char> Iterator for TokenizeIterator<'a, I, E, F> {
-    type Item = E;
+impl<I: Iterator, F: FnMut(&I::Item) -> char, T: Tokenizer<Input=I::Item>> Iterator for TokenizeIterator<I, F, T> {
+    type Item = T::Output;
 
     fn next(&mut self) -> Option<Self::Item> {
         let TokenizeIterator { iter, queue, map, tokenizer } = self;
-        let mut current_node = tokenizer.dfa.begin();
-        let mut last_matched_index = tokenizer.dfa.accept_index(&current_node);
+        let mut current_node = tokenizer.begin();
+        let mut last_matched_pattern = tokenizer.accept_index(current_node);
         let mut last_matched_length = 0;
         let mut i = 0;
         let mut items = Vec::new();
@@ -52,9 +60,9 @@ impl<'a, I: Iterator, E, F: FnMut(&I::Item) -> char> Iterator for TokenizeIterat
             i += 1;
             items.push(item);
             chars.push(c);
-            if let Some(node) = current_node.next(c) {
-                if let Some(index) = tokenizer.dfa.accept_index(&node) {
-                    last_matched_index = Some(index);
+            if let Some(node) = tokenizer.next_node(current_node, c) {
+                if let Some(index) = tokenizer.accept_index(node) {
+                    last_matched_pattern = Some(index);
                     last_matched_length = i;
                 }
                 current_node = node;
@@ -62,12 +70,12 @@ impl<'a, I: Iterator, E, F: FnMut(&I::Item) -> char> Iterator for TokenizeIterat
                 break;
             }
         }
-        if let Some(matched_index) = last_matched_index {
+        if let Some(matched_index) = last_matched_pattern {
             while items.len() > last_matched_length {
                 queue.push_front(items.pop().unwrap());
             }
             let s = chars.into_iter().take(last_matched_length).collect::<String>();
-            Some(tokenizer.enum_maker[matched_index](s.deref(), std::mem::take(&mut items)))
+            Some(tokenizer.enum_maker(matched_index)(s.deref(), std::mem::take(&mut items)))
         } else {
             None
         }
@@ -76,8 +84,8 @@ impl<'a, I: Iterator, E, F: FnMut(&I::Item) -> char> Iterator for TokenizeIterat
 
 #[cfg(test)]
 mod tests {
+    use crate::tokenizer::DFATokenizer;
     use crate::tokenizer::iter::Tokenize;
-    use crate::tokenizer::Tokenizer;
 
     #[test]
     fn tokenize_iterator() {
@@ -88,10 +96,10 @@ mod tests {
             C(String),
         }
         use Token::*;
-        let tokenizer = || Tokenizer::builder()
-            .add_pattern("[a-zA-Z_][a-zA-Z0-9_]*", |s, _| Token::A(s.to_string()))
-            .add_pattern("0([xX][0-9a-fA-F]+|[dD][0-9]+|[oO][0-7]+|[bB][01]+)|[1-9][0-9]*|0", |s, _| Token::B(s.to_string()))
-            .add_pattern(".|\n", |s, _| Token::C(s.to_string()))
+        let tokenizer = || DFATokenizer::builder()
+            .pattern("[a-zA-Z_][a-zA-Z0-9_]*", |s, _| Token::A(s.to_string()))
+            .pattern("0([xX][0-9a-fA-F]+|[dD][0-9]+|[oO][0-7]+|[bB][01]+)|[1-9][0-9]*|0", |s, _| Token::B(s.to_string()))
+            .pattern(".|\n", |s, _| Token::C(s.to_string()))
             .build().unwrap().0;
         let tokens = "let mut test = 0xFF;".chars().tokenize(tokenizer()).collect::<Vec<_>>();
         assert_eq!(
@@ -157,10 +165,10 @@ mod tests {
             C(String, usize, usize),
         }
         use Token::*;
-        let tokenizer = || Tokenizer::builder()
-            .add_pattern("[a-zA-Z_][a-zA-Z0-9_]*", |s, a: Vec<(char, _)>| Token::A(s.to_string(), a[0].1, a.len()))
-            .add_pattern("0([xX][0-9a-fA-F]+|[dD][0-9]+|[oO][0-7]+|[bB][01]+)|[1-9][0-9]*|0", |s, a| Token::B(s.to_string(), a[0].1, a.len()))
-            .add_pattern(".|\n", |s, a| Token::C(s.to_string(), a[0].1, a.len()))
+        let tokenizer = || DFATokenizer::builder()
+            .pattern("[a-zA-Z_][a-zA-Z0-9_]*", |s, a: Vec<(char, _)>| Token::A(s.to_string(), a[0].1, a.len()))
+            .pattern("0([xX][0-9a-fA-F]+|[dD][0-9]+|[oO][0-7]+|[bB][01]+)|[1-9][0-9]*|0", |s, a| Token::B(s.to_string(), a[0].1, a.len()))
+            .pattern(".|\n", |s, a| Token::C(s.to_string(), a[0].1, a.len()))
             .build().unwrap().0;
 
         let tokens = "let mut test = 0xFF;".chars()
