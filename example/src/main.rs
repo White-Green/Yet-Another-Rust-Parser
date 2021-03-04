@@ -71,6 +71,16 @@ fn main() {
                             ParseResult::Block(Some(*n))
                         } else { unreachable!() }))
         .rule(Rule::new(ParseResult::Block(None),
+                        &[Terminal(Token::Add), Terminal(Token::Number(0.0))],
+                        |list| if let [_, Terminal(Token::Number(n))] = list {
+                            ParseResult::Block(Some(*n))
+                        } else { unreachable!() }))
+        .rule(Rule::new(ParseResult::Block(None),
+                        &[Terminal(Token::Sub), Terminal(Token::Number(0.0))],
+                        |list| if let [_, Terminal(Token::Number(n))] = list {
+                            ParseResult::Block(Some(-*n))
+                        } else { unreachable!() }))
+        .rule(Rule::new(ParseResult::Block(None),
                         &[Terminal(Token::Bracket), NonTerminal(ParseResult::Sum(None)), Terminal(Token::CloseBracket)],
                         |list| if let [_, NonTerminal(ParseResult::Sum(n)), _] = list {
                             ParseResult::Block(*n)
