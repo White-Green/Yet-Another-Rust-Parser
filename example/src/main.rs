@@ -1,3 +1,5 @@
+use std::time::Instant;
+
 use parser::{enum_index, LR1Parser, Parse, Rule, Syntax};
 use parser::enum_index_derive::*;
 use parser::Symbol::{NonTerminal, Terminal};
@@ -22,7 +24,7 @@ fn main() {
         Product(Option<f64>),
         Block(Option<f64>),
     }
-
+    let start = Instant::now();
     let (tokenizer, _) = DFATokenizer::builder()
         .pattern("([0-9]+|[0-9]+\\.[0-9]*|[0-9]*\\.[0-9]+)([eE][\\+\\-]?[0-9]+)?", |s, _| Some(Token::Number(s.parse().unwrap())))
         .pattern("\\+", |_, _| Some(Token::Add))
@@ -91,6 +93,7 @@ fn main() {
                             ParseResult::Block(n.map(f64::sqrt))
                         } else { unreachable!() }))
         .build(ParseResult::Sum(None)));
+    println!("construct tokenizer and parser by {}ms", start.elapsed().as_millis());
     loop {
         let mut input = String::new();
         std::io::stdin().read_line(&mut input).expect("failed to read input");
