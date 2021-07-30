@@ -15,23 +15,23 @@ pub(crate) enum SymbolInternal<N, T> {
 }
 
 #[derive(Debug)]
-struct LR1Item<N, T> {
-    rule: Rc<Rule<N, T>>,
+struct LR1ItemInterop {
+    rule: usize,
     position: usize,
     lookahead_symbol: TerminalSymbolInterop,
 }
 
-impl<N, T> Clone for LR1Item<N, T> {
+impl Clone for LR1ItemInterop {
     fn clone(&self) -> Self {
-        LR1Item {
-            rule: self.rule.clone(),
+        LR1ItemInterop {
+            rule: self.rule,
             position: self.position,
             lookahead_symbol: self.lookahead_symbol.clone(),
         }
     }
 }
 
-impl<N, T> PartialEq for LR1Item<N, T> {
+impl PartialEq for LR1ItemInterop {
     fn eq(&self, other: &Self) -> bool {
         self.rule == other.rule &&
             self.position == other.position &&
@@ -39,9 +39,9 @@ impl<N, T> PartialEq for LR1Item<N, T> {
     }
 }
 
-impl<N, T> Eq for LR1Item<N, T> {}
+impl Eq for LR1ItemInterop {}
 
-impl<N, T> PartialOrd for LR1Item<N, T> {
+impl PartialOrd for LR1ItemInterop {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         match self.rule.partial_cmp(&other.rule) {
             Some(Ordering::Equal) => {}
@@ -55,7 +55,7 @@ impl<N, T> PartialOrd for LR1Item<N, T> {
     }
 }
 
-impl<N, T> Ord for LR1Item<N, T> {
+impl Ord for LR1ItemInterop {
     fn cmp(&self, other: &Self) -> Ordering {
         match self.rule.cmp(&other.rule) {
             Ordering::Equal => {}
@@ -69,7 +69,7 @@ impl<N, T> Ord for LR1Item<N, T> {
     }
 }
 
-impl<N, T> Hash for LR1Item<N, T> {
+impl Hash for LR1ItemInterop {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.rule.hash(state);
         self.position.hash(state);
@@ -77,8 +77,15 @@ impl<N, T> Hash for LR1Item<N, T> {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd)]
+pub struct LR1Item {
+    rule: usize,
+    position: usize,
+    lookahead_symbol: TerminalSymbolInterop,
+}
+
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) enum Action<State, Rule> {
+pub enum Action<State, Rule> {
     Shift(State),
     Reduce(Rule),
     Accept,
@@ -86,22 +93,22 @@ pub(crate) enum Action<State, Rule> {
 
 type NonTerminalSymbolInterop = usize;
 type TerminalSymbolInterop = TerminalSymbol<usize>;
-type StateInterop<N, T> = BTreeSet<LR1Item<N, T>>;
+type StateInterop = BTreeSet<LR1ItemInterop>;
 type SymbolInterop = SymbolInternal<NonTerminalSymbolInterop, TerminalSymbolInterop>;
-type ActionInterop<N, T> = Action<StateInterop<N, T>, Rc<Rule<N, T>>>;
-type GotoListInterop<N, T> = HashMap<SymbolInterop, StateInterop<N, T>>;
+type ActionInterop = Action<StateInterop, usize>;
+type GotoListInterop = HashMap<SymbolInterop, StateInterop>;
 type NullSetInterop = BTreeSet<SymbolInterop>;
 type FirstSetInterop = HashMap<SymbolInterop, BTreeSet<TerminalSymbolInterop>>;
-type ActionTableInterop<N, T> = HashMap<StateInterop<N, T>, HashMap<TerminalSymbolInterop, ActionInterop<N, T>>>;
-type GotoTableInterop<N, T> = HashMap<StateInterop<N, T>, HashMap<NonTerminalSymbolInterop, StateInterop<N, T>>>;
+type ActionTableInterop = HashMap<StateInterop, HashMap<TerminalSymbolInterop, ActionInterop>>;
+type GotoTableInterop = HashMap<StateInterop, HashMap<NonTerminalSymbolInterop, StateInterop>>;
 
-fn calc_goto<N, T>(set: &StateInterop<N, T>, syntax: &Syntax<N, T>, null: &NullSetInterop, first: &FirstSetInterop) -> GotoListInterop<N, T> {
+fn calc_goto<N, T>(set: &StateInterop, syntax: &Syntax<N, T>, null: &NullSetInterop, first: &FirstSetInterop) -> GotoListInterop {
     let mut goto = HashMap::new();
     for item in set {
-        if let Some(symbol) = item.rule.symbols.get(item.position) {
+        if let Some(symbol) = syntax.rules[item.rule].symbols.get(item.position) {
             goto.entry(symbol.clone())
                 .or_insert_with(|| BTreeSet::new())
-                .insert(LR1Item {
+                .insert(LR1ItemInterop {
                     rule: item.rule.clone(),
                     position: item.position + 1,
                     lookahead_symbol: item.lookahead_symbol.clone(),
@@ -114,27 +121,27 @@ fn calc_goto<N, T>(set: &StateInterop<N, T>, syntax: &Syntax<N, T>, null: &NullS
     goto
 }
 
-fn calc_closure<N, T>(set: &mut StateInterop<N, T>, syntax: &Syntax<N, T>, null: &NullSetInterop, first: &FirstSetInterop) {
+fn calc_closure<N, T>(set: &mut StateInterop, syntax: &Syntax<N, T>, null: &NullSetInterop, first: &FirstSetInterop) {
     let mut rules = HashMap::new();
-    for rule in &syntax.rules {
+    for (rule_index, rule) in syntax.rules.iter().enumerate() {
         rules.entry(rule.non_terminal)
             .or_insert_with(|| BTreeSet::new())
-            .insert(rule);
+            .insert(rule_index);
     }
     loop {
         let mut update = BTreeSet::new();
         for item in set.iter() {
-            let non_terminal = if let Some(SymbolInternal::NonTerminal(non_terminal)) = item.rule.symbols.get(item.position) {
+            let non_terminal = if let Some(SymbolInternal::NonTerminal(non_terminal)) = syntax.rules[item.rule].symbols.get(item.position) {
                 *non_terminal
             } else {
                 continue;
             };
             let lookahead_symbol = SymbolInternal::Terminal(item.lookahead_symbol.clone());
-            let follow = item.rule.symbols.get(item.position + 1..).unwrap_or(&[]).iter().chain(Some(&lookahead_symbol));
+            let follow = syntax.rules[item.rule].symbols.get(item.position + 1..).unwrap_or(&[]).iter().chain(Some(&lookahead_symbol));
             for lookahead_symbol in get_first(follow, null, first) {
                 for rule in &rules[&non_terminal] {
-                    update.insert(LR1Item {
-                        rule: Rc::clone(rule),
+                    update.insert(LR1ItemInterop {
+                        rule: *rule,
                         position: 0,
                         lookahead_symbol: lookahead_symbol.clone(),
                     });
@@ -216,12 +223,12 @@ fn calc_first<N, T>(syntax: &Syntax<N, T>, null: &NullSetInterop) -> FirstSetInt
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum CalcTableWarning<State, N, T> {
-    ShiftReduce { state: State, shift: State, reduce: Rc<Rule<N, T>> },
-    ReduceReduce { state: State, actions: [Rc<Rule<N, T>>; 2] },
+pub enum CalcTableWarning<State> {
+    ShiftReduce { state: State, shift: State, reduce: usize },
+    ReduceReduce { state: State, actions: [usize; 2] },
 }
 
-fn calc_table<N, T>(state_list: HashMap<StateInterop<N, T>, GotoListInterop<N, T>>, start_rule: &Rc<Rule<N, T>>) -> (ActionTableInterop<N, T>, GotoTableInterop<N, T>, Vec<CalcTableWarning<StateInterop<N, T>, N, T>>) {
+fn calc_table<N, T>(state_list: HashMap<StateInterop, GotoListInterop>, start_rule: usize, rules: &[Rule<N, T>]) -> (ActionTableInterop, GotoTableInterop, Vec<CalcTableWarning<StateInterop>>) {
     let mut action_table = HashMap::new();
     let mut goto_table = HashMap::new();
     let mut warnings = Vec::new();
@@ -236,8 +243,8 @@ fn calc_table<N, T>(state_list: HashMap<StateInterop<N, T>, GotoListInterop<N, T
         }
         let current_state = state.clone();
         for item in state {
-            if item.position == item.rule.symbols.len() {
-                if &item.rule == start_rule {
+            if item.position == rules[item.rule].symbols.len() {
+                if item.rule == start_rule {
                     action.insert(TerminalSymbol::EOI, Action::Accept);
                 } else {
                     match action.get(&item.lookahead_symbol) {
@@ -257,7 +264,7 @@ fn calc_table<N, T>(state_list: HashMap<StateInterop<N, T>, GotoListInterop<N, T
     (action_table, goto_table, warnings)
 }
 
-fn calc_all_goto<N, T>(syntax: &Syntax<N, T>, start_state: StateInterop<N, T>, null: &NullSetInterop, first: &FirstSetInterop) -> HashMap<StateInterop<N, T>, GotoListInterop<N, T>> {
+fn calc_all_goto<N, T>(syntax: &Syntax<N, T>, start_state: StateInterop, null: &NullSetInterop, first: &FirstSetInterop) -> HashMap<StateInterop, GotoListInterop> {
     let mut q = VecDeque::new();
     q.push_back(start_state);
     let mut state_list = HashMap::new();
@@ -272,13 +279,13 @@ fn calc_all_goto<N, T>(syntax: &Syntax<N, T>, start_state: StateInterop<N, T>, n
     state_list
 }
 
-fn calc_error_rules<N, T>(state_index: &HashMap<StateInterop<N, T>, usize>) -> HashMap<usize, HashSet<Rc<Rule<N, T>>>> {
+fn calc_error_rules<N, T>(state_index: &HashMap<StateInterop, usize>, rules: &[Rule<N, T>]) -> HashMap<usize, HashSet<usize>> {
     let mut error_rules = HashMap::new();
     for (item_list, index) in state_index {
         let mut set = HashSet::new();
         for item in item_list {
-            if item.rule.symbols.get(item.position) == Some(&SymbolInternal::Terminal(TerminalSymbol::Error)) {
-                set.insert(Rc::clone(&item.rule));
+            if rules[item.rule].symbols.get(item.position) == Some(&SymbolInternal::Terminal(TerminalSymbol::Error)) {
+                set.insert(item.rule);
             }
         }
         if !set.is_empty() { error_rules.insert(*index, set); }
@@ -287,16 +294,17 @@ fn calc_error_rules<N, T>(state_index: &HashMap<StateInterop<N, T>, usize>) -> H
     error_rules
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub struct LR1Parser<N, T> {
-    pub(crate) action_table: HashMap<usize, HashMap<TerminalSymbol<usize>, Action<usize, Rc<Rule<N, T>>>>>,
-    pub(crate) goto_table: HashMap<usize, HashMap<usize, usize>>,
-    pub(crate) error_rules: HashMap<usize, HashSet<Rc<Rule<N, T>>>>,
-    pub(crate) start: usize,
+    pub rules: Vec<Rule<N, T>>,
+    pub action_table: HashMap<usize, HashMap<TerminalSymbol<usize>, Action<usize, usize>>>,
+    pub goto_table: HashMap<usize, HashMap<usize, usize>>,
+    pub error_rules: HashMap<usize, HashSet<usize>>,
+    pub start: usize,
 }
 
 impl<N: EnumIndex, T: EnumIndex> LR1Parser<N, T> {
-    pub fn new(mut syntax: Syntax<N, T>) -> (Self, Vec<CalcTableWarning<usize, N, T>>) {
+    pub fn new(mut syntax: Syntax<N, T>) -> (Self, Vec<CalcTableWarning<BTreeSet<LR1Item>>>) {
         let start_symbol = {
             let mut non_terminal_symbols = BTreeSet::new();
             for rule in &syntax.rules {
@@ -309,12 +317,11 @@ impl<N: EnumIndex, T: EnumIndex> LR1Parser<N, T> {
             }
             (0..).into_iter().find(|i| !non_terminal_symbols.contains(i)).unwrap()
         };
-        let start_rule = Rule::builder_raw(start_symbol).non_terminal_raw(syntax.start).build(|_| unimplemented!());
-        let start_rule = Rc::new(start_rule);
-        syntax.rules.push(start_rule.clone());
+        let start_rule = syntax.rules.len();
+        syntax.rules.push(Rule::builder_raw(start_symbol).non_terminal_raw(syntax.start).build(|_| unimplemented!()));
         let null = calc_null(&syntax);
         let first = calc_first(&syntax, &null);
-        let mut start_state = vec![LR1Item { rule: start_rule.clone(), position: 0, lookahead_symbol: TerminalSymbol::EOI }].into_iter().collect();
+        let mut start_state = vec![LR1ItemInterop { rule: start_rule.clone(), position: 0, lookahead_symbol: TerminalSymbol::EOI }].into_iter().collect();
         calc_closure(&mut start_state, &syntax, &null, &first);
         let state_list = calc_all_goto(&syntax, start_state.clone(), &null, &first);
 
@@ -324,7 +331,7 @@ impl<N: EnumIndex, T: EnumIndex> LR1Parser<N, T> {
             state_index.insert(state.clone(), i);
             i += 1;
         }
-        let (action_table, goto_table, warnings) = calc_table(state_list, &start_rule);
+        let (action_table, goto_table, warnings) = calc_table(state_list, start_rule, &syntax.rules);
         let mut action_table: HashMap<_, _> = action_table.into_iter()
             .map(|(state, action)| (
                 *state_index.get(&state).unwrap(),
@@ -351,15 +358,19 @@ impl<N: EnumIndex, T: EnumIndex> LR1Parser<N, T> {
                     .collect()
             ))
             .collect();
+        let to_external = |state: StateInterop| {
+            state.into_iter().map(|LR1ItemInterop { rule, position, lookahead_symbol }| LR1Item { rule: rule, position, lookahead_symbol }).collect::<BTreeSet<_>>()
+        };
         let warnings = warnings.into_iter()
             .map(|warning| match warning {
-                CalcTableWarning::ShiftReduce { state, shift, reduce } => CalcTableWarning::ShiftReduce { state: *state_index.get(&state).unwrap(), shift: *state_index.get(&shift).unwrap(), reduce },
-                CalcTableWarning::ReduceReduce { state, actions } => CalcTableWarning::ReduceReduce { state: *state_index.get(&state).unwrap(), actions }
+                CalcTableWarning::ShiftReduce { state, shift, reduce } => CalcTableWarning::ShiftReduce { state: to_external(state), shift: to_external(shift), reduce },
+                CalcTableWarning::ReduceReduce { state, actions } => CalcTableWarning::ReduceReduce { state: to_external(state), actions }
             })
             .collect();
         action_table.shrink_to_fit();
         goto_table.shrink_to_fit();
-        (LR1Parser { action_table, goto_table, error_rules: calc_error_rules(&state_index), start: *state_index.get(&start_state).unwrap() }, warnings)
+        let error_rules = calc_error_rules(&state_index, &syntax.rules);
+        (LR1Parser { rules: syntax.rules, action_table, goto_table, error_rules, start: *state_index.get(&start_state).unwrap() }, warnings)
     }
 }
 
@@ -379,7 +390,7 @@ mod tests {
     use enum_index_derive::*;
 
     use crate::{Rule, Syntax};
-    use crate::parser::{Action, calc_closure, calc_first, calc_goto, calc_null, LR1Item, LR1Parser, SymbolInternal};
+    use crate::parser::{Action, calc_closure, calc_first, calc_goto, calc_null, LR1ItemInterop, LR1Parser, SymbolInternal};
     use crate::syntax::TerminalSymbol;
 
     #[test]
@@ -435,10 +446,10 @@ mod tests {
             .rule(Rule::builder(F).terminal(Bracket).non_terminal(E).terminal(CloseBracket).build(|_| F))
             .rule(Rule::builder(F).terminal(I).build(|_| F))
             .build(E);
-        let start_rule = Rc::new(Rule::builder_raw(3).non_terminal(E).build(|_| unreachable!()));
-        syntax.rules.push(Rc::clone(&start_rule));
-        let mut start_state = vec![LR1Item {
-            rule: start_rule.clone(),
+        let start_rule = syntax.rules.len();
+        syntax.rules.push(Rule::builder_raw(3).non_terminal(E).build(|_| unreachable!()));
+        let mut start_state = vec![LR1ItemInterop {
+            rule: start_rule,
             position: 0,
             lookahead_symbol: TerminalSymbol::EOI,
         }].into_iter().collect();
@@ -446,88 +457,88 @@ mod tests {
         let first = calc_first(&syntax, &null);
         calc_closure(&mut start_state, &syntax, &null, &first);
         assert_eq!(start_state, vec![
-            LR1Item {
-                rule: start_rule.clone(),
+            LR1ItemInterop {
+                rule: start_rule,
                 position: 0,
                 lookahead_symbol: TerminalSymbol::EOI,
             },
-            LR1Item {
-                rule: syntax.rules[0].clone(),
+            LR1ItemInterop {
+                rule: 0,
                 position: 0,
                 lookahead_symbol: TerminalSymbol::EOI,
             },
-            LR1Item {
-                rule: syntax.rules[0].clone(),
+            LR1ItemInterop {
+                rule: 0,
                 position: 0,
                 lookahead_symbol: TerminalSymbol::Symbol(Plus.enum_index()),
             },
-            LR1Item {
-                rule: syntax.rules[1].clone(),
+            LR1ItemInterop {
+                rule: 1,
                 position: 0,
                 lookahead_symbol: TerminalSymbol::EOI,
             },
-            LR1Item {
-                rule: syntax.rules[1].clone(),
+            LR1ItemInterop {
+                rule: 1,
                 position: 0,
                 lookahead_symbol: TerminalSymbol::Symbol(Plus.enum_index()),
             },
-            LR1Item {
-                rule: syntax.rules[2].clone(),
+            LR1ItemInterop {
+                rule: 2,
                 position: 0,
                 lookahead_symbol: TerminalSymbol::EOI,
             },
-            LR1Item {
-                rule: syntax.rules[2].clone(),
+            LR1ItemInterop {
+                rule: 2,
                 position: 0,
                 lookahead_symbol: TerminalSymbol::Symbol(Plus.enum_index()),
             },
-            LR1Item {
-                rule: syntax.rules[2].clone(),
+            LR1ItemInterop {
+                rule: 2,
                 position: 0,
                 lookahead_symbol: TerminalSymbol::Symbol(Star.enum_index()),
             },
-            LR1Item {
-                rule: syntax.rules[3].clone(),
+            LR1ItemInterop {
+                rule: 3,
                 position: 0,
                 lookahead_symbol: TerminalSymbol::EOI,
             },
-            LR1Item {
-                rule: syntax.rules[3].clone(),
+            LR1ItemInterop {
+                rule: 3,
                 position: 0,
                 lookahead_symbol: TerminalSymbol::Symbol(Plus.enum_index()),
             },
-            LR1Item {
-                rule: syntax.rules[3].clone(),
+            LR1ItemInterop {
+                rule: 3,
                 position: 0,
                 lookahead_symbol: TerminalSymbol::Symbol(Star.enum_index()),
             },
-            LR1Item {
-                rule: syntax.rules[4].clone(),
+            LR1ItemInterop {
+                rule: 4,
                 position: 0,
                 lookahead_symbol: TerminalSymbol::EOI,
             },
-            LR1Item {
-                rule: syntax.rules[4].clone(),
+            LR1ItemInterop {
+                rule: 4,
                 position: 0,
                 lookahead_symbol: TerminalSymbol::Symbol(Plus.enum_index()),
             },
-            LR1Item {
-                rule: syntax.rules[4].clone(),
+            LR1ItemInterop {
+                rule: 4,
                 position: 0,
                 lookahead_symbol: TerminalSymbol::Symbol(Star.enum_index()),
             },
-            LR1Item {
-                rule: syntax.rules[5].clone(),
+            LR1ItemInterop {
+                rule: 5,
                 position: 0,
                 lookahead_symbol: TerminalSymbol::EOI,
             },
-            LR1Item {
-                rule: syntax.rules[5].clone(),
+            LR1ItemInterop {
+                rule: 5,
                 position: 0,
                 lookahead_symbol: TerminalSymbol::Symbol(Plus.enum_index()),
             },
-            LR1Item {
-                rule: syntax.rules[5].clone(),
+            LR1ItemInterop {
+                rule: 5,
                 position: 0,
                 lookahead_symbol: TerminalSymbol::Symbol(Star.enum_index()),
             },
@@ -546,85 +557,85 @@ mod tests {
             .build(N::A);
         let null = calc_null(&syntax);
         let first = calc_first(&syntax, &null);
-        let mut closure = vec![LR1Item {
-            rule: syntax.rules[0].clone(),
+        let mut closure = vec![LR1ItemInterop {
+            rule: 0,
             position: 0,
             lookahead_symbol: TerminalSymbol::EOI,
         }].into_iter().collect();
         calc_closure(&mut closure, &syntax, &null, &first);
         assert_eq!(closure, vec![
-            LR1Item {
-                rule: syntax.rules[0].clone(),
+            LR1ItemInterop {
+                rule: 0,
                 position: 0,
                 lookahead_symbol: TerminalSymbol::EOI,
             },
-            LR1Item {
-                rule: syntax.rules[0].clone(),
+            LR1ItemInterop {
+                rule: 0,
                 position: 0,
                 lookahead_symbol: TerminalSymbol::Symbol(T::A.enum_index()),
             },
-            LR1Item {
-                rule: syntax.rules[0].clone(),
+            LR1ItemInterop {
+                rule: 0,
                 position: 0,
                 lookahead_symbol: TerminalSymbol::Symbol(T::C.enum_index()),
             },
-            LR1Item {
-                rule: syntax.rules[1].clone(),
+            LR1ItemInterop {
+                rule: 1,
                 position: 0,
                 lookahead_symbol: TerminalSymbol::Symbol(T::A.enum_index()),
             },
-            LR1Item {
-                rule: syntax.rules[1].clone(),
+            LR1ItemInterop {
+                rule: 1,
                 position: 0,
                 lookahead_symbol: TerminalSymbol::Symbol(T::C.enum_index()),
             },
-            LR1Item {
-                rule: syntax.rules[2].clone(),
+            LR1ItemInterop {
+                rule: 2,
                 position: 0,
                 lookahead_symbol: TerminalSymbol::Symbol(T::A.enum_index()),
             },
-            LR1Item {
-                rule: syntax.rules[2].clone(),
+            LR1ItemInterop {
+                rule: 2,
                 position: 0,
                 lookahead_symbol: TerminalSymbol::Symbol(T::C.enum_index()),
             },
-            LR1Item {
-                rule: syntax.rules[3].clone(),
+            LR1ItemInterop {
+                rule: 3,
                 position: 0,
                 lookahead_symbol: TerminalSymbol::Symbol(T::A.enum_index()),
             },
-            LR1Item {
-                rule: syntax.rules[3].clone(),
+            LR1ItemInterop {
+                rule: 3,
                 position: 0,
                 lookahead_symbol: TerminalSymbol::Symbol(T::C.enum_index()),
             },
-            LR1Item {
-                rule: syntax.rules[4].clone(),
+            LR1ItemInterop {
+                rule: 4,
                 position: 0,
                 lookahead_symbol: TerminalSymbol::Symbol(T::A.enum_index()),
             },
-            LR1Item {
-                rule: syntax.rules[4].clone(),
+            LR1ItemInterop {
+                rule: 4,
                 position: 0,
                 lookahead_symbol: TerminalSymbol::Symbol(T::B.enum_index()),
             },
-            LR1Item {
-                rule: syntax.rules[4].clone(),
+            LR1ItemInterop {
+                rule: 4,
                 position: 0,
                 lookahead_symbol: TerminalSymbol::Symbol(T::C.enum_index()),
             },
-            LR1Item {
-                rule: syntax.rules[5].clone(),
+            LR1ItemInterop {
+                rule: 5,
                 position: 0,
                 lookahead_symbol: TerminalSymbol::Symbol(T::A.enum_index()),
             },
-            LR1Item {
-                rule: syntax.rules[5].clone(),
+            LR1ItemInterop {
+                rule: 5,
                 position: 0,
                 lookahead_symbol: TerminalSymbol::Symbol(T::B.enum_index()),
             },
-            LR1Item {
-                rule: syntax.rules[5].clone(),
+            LR1ItemInterop {
+                rule: 5,
                 position: 0,
                 lookahead_symbol: TerminalSymbol::Symbol(T::C.enum_index()),
             },
@@ -648,8 +659,8 @@ mod tests {
         let null = calc_null(&syntax);
         let first = calc_first(&syntax, &null);
         let closure = {
-            let mut closure = vec![LR1Item {
-                rule: syntax.rules[0].clone(),
+            let mut closure = vec![LR1ItemInterop {
+                rule: 0,
                 position: 0,
                 lookahead_symbol: TerminalSymbol::EOI,
             }].into_iter().collect();
@@ -660,18 +671,18 @@ mod tests {
         assert_eq!(goto, vec![
             (SymbolInternal::Terminal(TerminalSymbol::Symbol(T::C.enum_index())),
              vec![
-                 LR1Item {
-                     rule: syntax.rules[4].clone(),
+                 LR1ItemInterop {
+                     rule: 4,
                      position: 1,
                      lookahead_symbol: TerminalSymbol::Symbol(T::A.enum_index()),
                  },
-                 LR1Item {
-                     rule: syntax.rules[4].clone(),
+                 LR1ItemInterop {
+                     rule: 4,
                      position: 1,
                      lookahead_symbol: TerminalSymbol::Symbol(T::B.enum_index()),
                  },
-                 LR1Item {
-                     rule: syntax.rules[4].clone(),
+                 LR1ItemInterop {
+                     rule: 4,
                      position: 1,
                      lookahead_symbol: TerminalSymbol::Symbol(T::C.enum_index()),
                  },
@@ -679,64 +690,64 @@ mod tests {
             ),
             (SymbolInternal::NonTerminal(N::A.enum_index()),
              vec![
-                 LR1Item {
-                     rule: syntax.rules[3].clone(),
+                 LR1ItemInterop {
+                     rule: 3,
                      position: 1,
                      lookahead_symbol: TerminalSymbol::Symbol(T::A.enum_index()),
                  },
-                 LR1Item {
-                     rule: syntax.rules[3].clone(),
+                 LR1ItemInterop {
+                     rule: 3,
                      position: 1,
                      lookahead_symbol: TerminalSymbol::Symbol(T::C.enum_index()),
                  },
              ].into_iter().collect()),
             (SymbolInternal::NonTerminal(N::B.enum_index()),
              vec![
-                 LR1Item {
-                     rule: syntax.rules[0].clone(),
+                 LR1ItemInterop {
+                     rule: 0,
                      position: 1,
                      lookahead_symbol: TerminalSymbol::EOI,
                  },
-                 LR1Item {
-                     rule: syntax.rules[0].clone(),
+                 LR1ItemInterop {
+                     rule: 0,
                      position: 1,
                      lookahead_symbol: TerminalSymbol::Symbol(T::A.enum_index()),
                  },
-                 LR1Item {
-                     rule: syntax.rules[0].clone(),
+                 LR1ItemInterop {
+                     rule: 0,
                      position: 1,
                      lookahead_symbol: TerminalSymbol::Symbol(T::C.enum_index()),
                  },
-                 LR1Item {
-                     rule: syntax.rules[4].clone(),
+                 LR1ItemInterop {
+                     rule: 4,
                      position: 0,
                      lookahead_symbol: TerminalSymbol::Symbol(T::A.enum_index()),
                  },
-                 LR1Item {
-                     rule: syntax.rules[5].clone(),
+                 LR1ItemInterop {
+                     rule: 5,
                      position: 0,
                      lookahead_symbol: TerminalSymbol::Symbol(T::A.enum_index()),
                  },
              ].into_iter().collect()),
             (SymbolInternal::NonTerminal(N::C.enum_index()),
              vec![
-                 LR1Item {
-                     rule: syntax.rules[1].clone(),
+                 LR1ItemInterop {
+                     rule: 1,
                      position: 1,
                      lookahead_symbol: TerminalSymbol::Symbol(T::A.enum_index()),
                  },
-                 LR1Item {
-                     rule: syntax.rules[1].clone(),
+                 LR1ItemInterop {
+                     rule: 1,
                      position: 1,
                      lookahead_symbol: TerminalSymbol::Symbol(T::C.enum_index()),
                  },
-                 LR1Item {
-                     rule: syntax.rules[2].clone(),
+                 LR1ItemInterop {
+                     rule: 2,
                      position: 1,
                      lookahead_symbol: TerminalSymbol::Symbol(T::A.enum_index()),
                  },
-                 LR1Item {
-                     rule: syntax.rules[2].clone(),
+                 LR1ItemInterop {
+                     rule: 2,
                      position: 1,
                      lookahead_symbol: TerminalSymbol::Symbol(T::C.enum_index()),
                  },
@@ -828,6 +839,7 @@ mod tests {
             /*       6:E'->E  */
             .build(E);
         let expect = LR1Parser {
+            rules: syntax.rules,
             action_table: vec![
                 // 0:closure([E'->.E,$])=[E'->.E,$],[E->.E+T,$+],[E->.T,$+],[T->.T*F,$+*],[T->.F,$+*],[F->.(E),$+*],[F->.i,$+*]
                 //      Action: (=>s4,i=>s5
@@ -854,8 +866,8 @@ mod tests {
                     2,
                     vec![
                         (TerminalSymbol::Symbol(Star.enum_index()), Action::Shift(7)),
-                        (TerminalSymbol::EOI, Action::Reduce(syntax.rules[1].clone())),
-                        (TerminalSymbol::Symbol(Plus.enum_index()), Action::Reduce(syntax.rules[1].clone())),
+                        (TerminalSymbol::EOI, Action::Reduce(1)),
+                        (TerminalSymbol::Symbol(Plus.enum_index()), Action::Reduce(1)),
                     ].into_iter().collect()
                 ),
                 // 3:closure([T->F.,$+*])=[T->F.,$+*]
@@ -863,9 +875,9 @@ mod tests {
                 (
                     3,
                     vec![
-                        (TerminalSymbol::EOI, Action::Reduce(syntax.rules[3].clone())),
-                        (TerminalSymbol::Symbol(Plus.enum_index()), Action::Reduce(syntax.rules[3].clone())),
-                        (TerminalSymbol::Symbol(Star.enum_index()), Action::Reduce(syntax.rules[3].clone())),
+                        (TerminalSymbol::EOI, Action::Reduce(3)),
+                        (TerminalSymbol::Symbol(Plus.enum_index()), Action::Reduce(3)),
+                        (TerminalSymbol::Symbol(Star.enum_index()), Action::Reduce(3)),
                     ].into_iter().collect()
                 ),
                 // 4:closure([F->(.E),$+*])=[F->(.E),$+*],[E->.E+T,)+],[E->.T,)+],[T->.T*F,)+*],[T->.F,)+*],[F->.(E),)+*],[F->.i,)+*]
@@ -883,9 +895,9 @@ mod tests {
                 (
                     5,
                     vec![
-                        (TerminalSymbol::EOI, Action::Reduce(syntax.rules[5].clone())),
-                        (TerminalSymbol::Symbol(Plus.enum_index()), Action::Reduce(syntax.rules[5].clone())),
-                        (TerminalSymbol::Symbol(Star.enum_index()), Action::Reduce(syntax.rules[5].clone())),
+                        (TerminalSymbol::EOI, Action::Reduce(5)),
+                        (TerminalSymbol::Symbol(Plus.enum_index()), Action::Reduce(5)),
+                        (TerminalSymbol::Symbol(Star.enum_index()), Action::Reduce(5)),
                     ].into_iter().collect()
                 ),
                 // 6:closure([E->E+.T,$+])=[E->E+.T,$+],[T->.T*F,$+*],[T->.F,$+*],[F->.(E),$+*],[F->.i,$+*]
@@ -922,8 +934,8 @@ mod tests {
                 (
                     9,
                     vec![
-                        (TerminalSymbol::Symbol(CloseBracket.enum_index()), Action::Reduce(syntax.rules[1].clone())),
-                        (TerminalSymbol::Symbol(Plus.enum_index()), Action::Reduce(syntax.rules[1].clone())),
+                        (TerminalSymbol::Symbol(CloseBracket.enum_index()), Action::Reduce(1)),
+                        (TerminalSymbol::Symbol(Plus.enum_index()), Action::Reduce(1)),
                         (TerminalSymbol::Symbol(Star.enum_index()), Action::Shift(17)),
                     ].into_iter().collect()
                 ),
@@ -932,9 +944,9 @@ mod tests {
                 (
                     10,
                     vec![
-                        (TerminalSymbol::Symbol(CloseBracket.enum_index()), Action::Reduce(syntax.rules[3].clone())),
-                        (TerminalSymbol::Symbol(Plus.enum_index()), Action::Reduce(syntax.rules[3].clone())),
-                        (TerminalSymbol::Symbol(Star.enum_index()), Action::Reduce(syntax.rules[3].clone())),
+                        (TerminalSymbol::Symbol(CloseBracket.enum_index()), Action::Reduce(3)),
+                        (TerminalSymbol::Symbol(Plus.enum_index()), Action::Reduce(3)),
+                        (TerminalSymbol::Symbol(Star.enum_index()), Action::Reduce(3)),
                     ].into_iter().collect()
                 ),
                 //11:closure([E->E+.T,)+])=[E->E+.T,)+],[T->.T*F,)+*],[T->.F,)+*],[F->.(E),)+*],[F->.i,)+*]
@@ -962,9 +974,9 @@ mod tests {
                 (
                     13,
                     vec![
-                        (TerminalSymbol::Symbol(CloseBracket.enum_index()), Action::Reduce(syntax.rules[5].clone())),
-                        (TerminalSymbol::Symbol(Plus.enum_index()), Action::Reduce(syntax.rules[5].clone())),
-                        (TerminalSymbol::Symbol(Star.enum_index()), Action::Reduce(syntax.rules[5].clone())),
+                        (TerminalSymbol::Symbol(CloseBracket.enum_index()), Action::Reduce(5)),
+                        (TerminalSymbol::Symbol(Plus.enum_index()), Action::Reduce(5)),
+                        (TerminalSymbol::Symbol(Star.enum_index()), Action::Reduce(5)),
                     ].into_iter().collect()
                 ),
                 //14:closure([E->E+T.,$+],[T->T.*F,$+*])=[E->E+T.,$+],[T->T.*F,$+*]
@@ -972,8 +984,8 @@ mod tests {
                 (
                     14,
                     vec![
-                        (TerminalSymbol::EOI, Action::Reduce(syntax.rules[0].clone())),
-                        (TerminalSymbol::Symbol(Plus.enum_index()), Action::Reduce(syntax.rules[0].clone())),
+                        (TerminalSymbol::EOI, Action::Reduce(0)),
+                        (TerminalSymbol::Symbol(Plus.enum_index()), Action::Reduce(0)),
                         (TerminalSymbol::Symbol(Star.enum_index()), Action::Shift(7)),
                     ].into_iter().collect()
                 ),
@@ -982,9 +994,9 @@ mod tests {
                 (
                     15,
                     vec![
-                        (TerminalSymbol::EOI, Action::Reduce(syntax.rules[2].clone())),
-                        (TerminalSymbol::Symbol(Plus.enum_index()), Action::Reduce(syntax.rules[2].clone())),
-                        (TerminalSymbol::Symbol(Star.enum_index()), Action::Reduce(syntax.rules[2].clone())),
+                        (TerminalSymbol::EOI, Action::Reduce(2)),
+                        (TerminalSymbol::Symbol(Plus.enum_index()), Action::Reduce(2)),
+                        (TerminalSymbol::Symbol(Star.enum_index()), Action::Reduce(2)),
                     ].into_iter().collect()
                 ),
                 //16:closure([F->(E).,$+*])=[F->(E).,$+*]
@@ -992,9 +1004,9 @@ mod tests {
                 (
                     16,
                     vec![
-                        (TerminalSymbol::EOI, Action::Reduce(syntax.rules[4].clone())),
-                        (TerminalSymbol::Symbol(Plus.enum_index()), Action::Reduce(syntax.rules[4].clone())),
-                        (TerminalSymbol::Symbol(Star.enum_index()), Action::Reduce(syntax.rules[4].clone())),
+                        (TerminalSymbol::EOI, Action::Reduce(4)),
+                        (TerminalSymbol::Symbol(Plus.enum_index()), Action::Reduce(4)),
+                        (TerminalSymbol::Symbol(Star.enum_index()), Action::Reduce(4)),
                     ].into_iter().collect()
                 ),
                 //17:closure([T->T*.F,)+*])=[T->T*.F,)+*],[F->.(E),)+*],[F->.i,)+*]
@@ -1012,8 +1024,8 @@ mod tests {
                 (
                     18,
                     vec![
-                        (TerminalSymbol::Symbol(CloseBracket.enum_index()), Action::Reduce(syntax.rules[0].clone())),
-                        (TerminalSymbol::Symbol(Plus.enum_index()), Action::Reduce(syntax.rules[0].clone())),
+                        (TerminalSymbol::Symbol(CloseBracket.enum_index()), Action::Reduce(0)),
+                        (TerminalSymbol::Symbol(Plus.enum_index()), Action::Reduce(0)),
                         (TerminalSymbol::Symbol(Star.enum_index()), Action::Shift(17)),
                     ].into_iter().collect()
                 ),
@@ -1031,9 +1043,9 @@ mod tests {
                 (
                     20,
                     vec![
-                        (TerminalSymbol::Symbol(CloseBracket.enum_index()), Action::Reduce(syntax.rules[2].clone())),
-                        (TerminalSymbol::Symbol(Plus.enum_index()), Action::Reduce(syntax.rules[2].clone())),
-                        (TerminalSymbol::Symbol(Star.enum_index()), Action::Reduce(syntax.rules[2].clone())),
+                        (TerminalSymbol::Symbol(CloseBracket.enum_index()), Action::Reduce(2)),
+                        (TerminalSymbol::Symbol(Plus.enum_index()), Action::Reduce(2)),
+                        (TerminalSymbol::Symbol(Star.enum_index()), Action::Reduce(2)),
                     ].into_iter().collect()
                 ),
                 //21:closure([F->(E).,)+*])=[F->(E).,)+*]
@@ -1041,9 +1053,9 @@ mod tests {
                 (
                     21,
                     vec![
-                        (TerminalSymbol::Symbol(CloseBracket.enum_index()), Action::Reduce(syntax.rules[4].clone())),
-                        (TerminalSymbol::Symbol(Plus.enum_index()), Action::Reduce(syntax.rules[4].clone())),
-                        (TerminalSymbol::Symbol(Star.enum_index()), Action::Reduce(syntax.rules[4].clone())),
+                        (TerminalSymbol::Symbol(CloseBracket.enum_index()), Action::Reduce(4)),
+                        (TerminalSymbol::Symbol(Plus.enum_index()), Action::Reduce(4)),
+                        (TerminalSymbol::Symbol(Star.enum_index()), Action::Reduce(4)),
                     ].into_iter().collect()
                 ),
             ].into_iter().collect(),
@@ -1102,6 +1114,15 @@ mod tests {
             error_rules: HashMap::new(),
             start: 0,
         };
+        let syntax = Syntax::builder()
+            .rule(/* 0:E->E+T */Rule::builder(E).non_terminal(E).terminal(Plus).non_terminal(T).build(|_| E))
+            .rule(/* 1:E->T   */Rule::builder(E).non_terminal(T).build(|_| E))
+            .rule(/* 2:T->T*F */Rule::builder(T).non_terminal(T).terminal(Star).non_terminal(F).build(|_| T))
+            .rule(/* 3:T->F   */Rule::builder(T).non_terminal(F).build(|_| T))
+            .rule(/* 4:F->(E) */Rule::builder(F).terminal(Bracket).non_terminal(E).terminal(CloseBracket).build(|_| F))
+            .rule(/* 5:F->i   */Rule::builder(F).terminal(I).build(|_| F))
+            /*       6:E'->E  */
+            .build(E);
         let (parser, _warning) = LR1Parser::new(syntax);
         assert!(parser_isomorphisms(&parser, &expect));
 
@@ -1114,6 +1135,7 @@ mod tests {
             /*       5:E'->E      */
             .build(E);
         let expect = LR1Parser {
+            rules: syntax.rules,
             action_table: vec![
                 // 0:closure([E'->.E,$])=[E'->.E,$],[E->.E+T,$+],[E->.T,$+],[T->.i,$+],[T->.(E),$+],[T->.(error),$+]
                 //      Action: (=>s1,i=>s2
@@ -1141,8 +1163,8 @@ mod tests {
                 (
                     2,
                     vec![
-                        (TerminalSymbol::Symbol(Plus.enum_index()), Action::Reduce(syntax.rules[2].clone())),
-                        (TerminalSymbol::EOI, Action::Reduce(syntax.rules[2].clone())),
+                        (TerminalSymbol::Symbol(Plus.enum_index()), Action::Reduce(2)),
+                        (TerminalSymbol::EOI, Action::Reduce(2)),
                     ].into_iter().collect()
                 ),
                 // 3:closure([E'->E.,$],[E->E.+T,$+])=[E'->E.,$],[E->E.+T,$+]
@@ -1159,8 +1181,8 @@ mod tests {
                 (
                     4,
                     vec![
-                        (TerminalSymbol::Symbol(Plus.enum_index()), Action::Reduce(syntax.rules[1].clone())),
-                        (TerminalSymbol::EOI, Action::Reduce(syntax.rules[1].clone())),
+                        (TerminalSymbol::Symbol(Plus.enum_index()), Action::Reduce(1)),
+                        (TerminalSymbol::EOI, Action::Reduce(1)),
                     ].into_iter().collect()
                 ),
                 // 5:closure([T->(.E),)+],[T->(.error),)+])=[T->(.E),)+],[T->(.error),)+],[E->.E+T,)+],[E->.T,)+],[T->.i,)+],[T->.(E),)+],[T->.(error),)+]
@@ -1179,8 +1201,8 @@ mod tests {
                 (
                     6,
                     vec![
-                        (TerminalSymbol::Symbol(CloseBracket.enum_index()), Action::Reduce(syntax.rules[2].clone())),
-                        (TerminalSymbol::Symbol(Plus.enum_index()), Action::Reduce(syntax.rules[2].clone())),
+                        (TerminalSymbol::Symbol(CloseBracket.enum_index()), Action::Reduce(2)),
+                        (TerminalSymbol::Symbol(Plus.enum_index()), Action::Reduce(2)),
                     ].into_iter().collect()
                 ),
                 // 7:closure([T->(error.),$+])=[T->(error.),$+]
@@ -1205,8 +1227,8 @@ mod tests {
                 (
                     9,
                     vec![
-                        (TerminalSymbol::Symbol(CloseBracket.enum_index()), Action::Reduce(syntax.rules[1].clone())),
-                        (TerminalSymbol::Symbol(Plus.enum_index()), Action::Reduce(syntax.rules[1].clone())),
+                        (TerminalSymbol::Symbol(CloseBracket.enum_index()), Action::Reduce(1)),
+                        (TerminalSymbol::Symbol(Plus.enum_index()), Action::Reduce(1)),
                     ].into_iter().collect()
                 ),
                 //10:closure([E->E+.T,$+])=[E->E+.T,$+],[T->.i,$+],[T->.(E),$+],[T->.(error),$+]
@@ -1241,8 +1263,8 @@ mod tests {
                 (
                     13,
                     vec![
-                        (TerminalSymbol::Symbol(Plus.enum_index()), Action::Reduce(syntax.rules[4].clone())),
-                        (TerminalSymbol::EOI, Action::Reduce(syntax.rules[4].clone())),
+                        (TerminalSymbol::Symbol(Plus.enum_index()), Action::Reduce(4)),
+                        (TerminalSymbol::EOI, Action::Reduce(4)),
                     ].into_iter().collect()
                 ),
                 //14:closure([T->(E).,$+])=[T->(E).,$+]
@@ -1250,8 +1272,8 @@ mod tests {
                 (
                     14,
                     vec![
-                        (TerminalSymbol::Symbol(Plus.enum_index()), Action::Reduce(syntax.rules[3].clone())),
-                        (TerminalSymbol::EOI, Action::Reduce(syntax.rules[3].clone())),
+                        (TerminalSymbol::Symbol(Plus.enum_index()), Action::Reduce(3)),
+                        (TerminalSymbol::EOI, Action::Reduce(3)),
                     ].into_iter().collect()
                 ),
                 //15:closure([E->E+.T,)+])=[E->E+.T,)+],[T->.i,)+],[T->.(E),)+],[T->.(error),)+]
@@ -1269,8 +1291,8 @@ mod tests {
                 (
                     16,
                     vec![
-                        (TerminalSymbol::Symbol(Plus.enum_index()), Action::Reduce(syntax.rules[0].clone())),
-                        (TerminalSymbol::EOI, Action::Reduce(syntax.rules[0].clone())),
+                        (TerminalSymbol::Symbol(Plus.enum_index()), Action::Reduce(0)),
+                        (TerminalSymbol::EOI, Action::Reduce(0)),
                     ].into_iter().collect()
                 ),
                 //17:closure([T->(error).,)+])=[T->(error).,)+]
@@ -1278,8 +1300,8 @@ mod tests {
                 (
                     17,
                     vec![
-                        (TerminalSymbol::Symbol(CloseBracket.enum_index()), Action::Reduce(syntax.rules[4].clone())),
-                        (TerminalSymbol::Symbol(Plus.enum_index()), Action::Reduce(syntax.rules[4].clone())),
+                        (TerminalSymbol::Symbol(CloseBracket.enum_index()), Action::Reduce(4)),
+                        (TerminalSymbol::Symbol(Plus.enum_index()), Action::Reduce(4)),
                     ].into_iter().collect()
                 ),
                 //18:closure([T->(E).,)+])=[T->(E).,)+]
@@ -1287,8 +1309,8 @@ mod tests {
                 (
                     18,
                     vec![
-                        (TerminalSymbol::Symbol(CloseBracket.enum_index()), Action::Reduce(syntax.rules[3].clone())),
-                        (TerminalSymbol::Symbol(Plus.enum_index()), Action::Reduce(syntax.rules[3].clone())),
+                        (TerminalSymbol::Symbol(CloseBracket.enum_index()), Action::Reduce(3)),
+                        (TerminalSymbol::Symbol(Plus.enum_index()), Action::Reduce(3)),
                     ].into_iter().collect()
                 ),
                 //19:closure([E->E+T.,)+])=[E->E+T.,)+]
@@ -1296,8 +1318,8 @@ mod tests {
                 (
                     19,
                     vec![
-                        (TerminalSymbol::Symbol(CloseBracket.enum_index()), Action::Reduce(syntax.rules[0].clone())),
-                        (TerminalSymbol::Symbol(Plus.enum_index()), Action::Reduce(syntax.rules[0].clone())),
+                        (TerminalSymbol::Symbol(CloseBracket.enum_index()), Action::Reduce(0)),
+                        (TerminalSymbol::Symbol(Plus.enum_index()), Action::Reduce(0)),
                     ].into_iter().collect()
                 ),
             ].into_iter().collect(),
@@ -1340,18 +1362,26 @@ mod tests {
                 (
                     1,
                     vec![
-                        syntax.rules[4].clone()
+                        4
                     ].into_iter().collect()
                 ),
                 (
                     5,
                     vec![
-                        syntax.rules[4].clone()
+                        4
                     ].into_iter().collect()
                 )
             ].into_iter().collect(),
             start: 0,
         };
+        let syntax = Syntax::builder()
+            .rule(/* 0:E->E+T     */Rule::builder(E).non_terminal(E).terminal(Plus).non_terminal(T).build(|_| E))
+            .rule(/* 1:E->T       */Rule::builder(E).non_terminal(T).build(|_| E))
+            .rule(/* 2:T->i       */Rule::builder(T).terminal(I).build(|_| T))
+            .rule(/* 3:T->(E)     */Rule::builder(T).terminal(Bracket).non_terminal(E).terminal(CloseBracket).build(|_| T))
+            .rule(/* 4:T->(error) */Rule::builder(T).terminal(Bracket).error().terminal(CloseBracket).build(|_| T))
+            /*       5:E'->E      */
+            .build(E);
         let (parser, _warning) = LR1Parser::new(syntax);
         assert!(parser_isomorphisms(&parser, &expect));
     }

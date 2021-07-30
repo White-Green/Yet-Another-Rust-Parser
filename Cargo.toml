@@ -1,2 +1,2 @@
 [workspace]
-members = ["tokenizer", "parser", "example"]
+members = ["tokenizer", "parser", "parser_generator", "tokenizer_generator", "example"]

@@ -1,0 +1,20 @@
+[package]
+name = "parser_generator"
+version = "0.1.0"
+authors = ["White-Green <43771790+White-Green@users.noreply.github.com>"]
+edition = "2018"
+
+[lib]
+proc-macro = true
+
+[[test]]
+name = "tests"
+path = "tests/main.rs"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+syn = { version = "1.0.74", features = ["full"] }
+quote = "1.0.9"
+proc-macro2 = "1.0.28"
+parser = { path = "../parser" }

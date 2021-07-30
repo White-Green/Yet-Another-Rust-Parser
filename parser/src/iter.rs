@@ -1,4 +1,6 @@
 use std::collections::{HashSet, VecDeque};
+use std::error::Error;
+use std::fmt::{Display, Formatter};
 
 use enum_index::EnumIndex;
 
@@ -10,6 +12,14 @@ use crate::syntax::TerminalSymbol;
 pub enum ParseError {
     SyntaxError
 }
+
+impl Display for ParseError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", self)
+    }
+}
+
+impl Error for ParseError {}
 
 pub trait Parse<N>: Iterator {
     fn parse(self, parser: &LR1Parser<N, Self::Item>) -> Result<N, ParseError>;
@@ -41,7 +51,7 @@ impl<I: Iterator, N> Parse<N> for I
                     buffer.pop_front();
                 }
                 Some(Action::Reduce(rule)) => {
-                    let (state, mut rule_symbols): (Vec<_>, Vec<_>) = stack.drain(stack.len() - rule.symbols.len()..).unzip();
+                    let (state, mut rule_symbols): (Vec<_>, Vec<_>) = stack.drain(stack.len() - parser.rules[*rule].symbols.len()..).unzip();
                     let first_index: usize = rule_symbols.iter()
                         .find_map(|symbol| match symbol {
                             SymbolInternal::NonTerminal((_, i)) => Some(*i),
@@ -70,9 +80,9 @@ impl<I: Iterator, N> Parse<N> for I
                         rule_symbols_
                     };
                     current_state = state.first().copied().unwrap_or(current_state);
-                    let reduced_symbol = SymbolInternal::NonTerminal(((rule.generator)(&mut rule_symbols[..]), first_index));
+                    let reduced_symbol = SymbolInternal::NonTerminal(((parser.rules[*rule].generator)(&mut rule_symbols[..]), first_index));
                     stack.push((current_state, reduced_symbol));
-                    current_state = *parser.goto_table.get(&current_state).unwrap().get(&rule.non_terminal).unwrap();
+                    current_state = *parser.goto_table.get(&current_state).unwrap().get(&parser.rules[*rule].non_terminal).unwrap();
                     if error_recovery_state.contains(rule) {
                         error_recovery_state.clear();
                     }

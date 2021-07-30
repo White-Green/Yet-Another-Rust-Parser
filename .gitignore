@@ -1,7 +1,9 @@
 /*
 !/.gitignore
 !/tokenizer
+!/tokenizer_generator
 !/parser
+!/parser_generator
 !/example
 !/Cargo.toml
 !/README.md

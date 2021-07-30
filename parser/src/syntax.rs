@@ -12,7 +12,7 @@ use crate::Symbol;
 
 #[derive(Debug, PartialEq)]
 pub struct Syntax<N, T> {
-    pub(crate) rules: Vec<Rc<Rule<N, T>>>,
+    pub(crate) rules: Vec<Rule<N, T>>,
     pub(crate) start: usize,
 }
 
@@ -20,11 +20,15 @@ impl<N: EnumIndex, T: EnumIndex> Syntax<N, T> {
     pub fn builder() -> SyntaxBuilder<N, T> {
         Default::default()
     }
+
+    pub fn into_rules(self) -> Vec<Rule<N, T>> {
+        self.rules
+    }
 }
 
 #[derive(Debug, PartialEq)]
 pub struct SyntaxBuilder<N, T> {
-    rules: Vec<Rc<Rule<N, T>>>,
+    rules: Vec<Rule<N, T>>,
 }
 
 impl<N, T> Default for SyntaxBuilder<N, T> {
@@ -39,7 +43,7 @@ impl<N: EnumIndex, T: EnumIndex> SyntaxBuilder<N, T> {
     }
 
     pub fn rule(mut self, rule: Rule<N, T>) -> Self {
-        self.rules.push(Rc::new(rule));
+        self.rules.push(rule);
         self
     }
 
@@ -48,6 +52,14 @@ impl<N: EnumIndex, T: EnumIndex> SyntaxBuilder<N, T> {
         Syntax {
             rules,
             start: start.enum_index(),
+        }
+    }
+
+    pub fn build_raw(self, start: usize) -> Syntax<N, T> {
+        let SyntaxBuilder { rules } = self;
+        Syntax {
+            rules,
+            start,
         }
     }
 }
@@ -112,7 +124,7 @@ impl<N, T> Hash for Rule<N, T> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Ord, PartialOrd, Hash)]
-pub(crate) enum TerminalSymbol<T> {
+pub enum TerminalSymbol<T> {
     Symbol(T),
     Error,
     EOI,
@@ -125,6 +137,19 @@ impl<N: EnumIndex, T: EnumIndex> Rule<N, T> {
             symbols: rule.iter().map(|symbol| match symbol {
                 Symbol::NonTerminal(n) => SymbolInternal::NonTerminal(n.enum_index()),
                 Symbol::Terminal(t) => SymbolInternal::Terminal(TerminalSymbol::Symbol(t.enum_index())),
+                Symbol::Error => SymbolInternal::Terminal(TerminalSymbol::Error)
+            }).collect(),
+            generator: Box::new(generator),
+            phantom: Default::default(),
+        }
+    }
+
+    pub fn new_raw<F: 'static + Fn(&mut [Symbol<&mut N, &T>]) -> N>(start: usize, rule: &[Symbol<usize, usize>], generator: F) -> Rule<N, T> {
+        Rule {
+            non_terminal: start,
+            symbols: rule.iter().map(|symbol| match symbol {
+                Symbol::NonTerminal(n) => SymbolInternal::NonTerminal(*n),
+                Symbol::Terminal(t) => SymbolInternal::Terminal(TerminalSymbol::Symbol(*t)),
                 Symbol::Error => SymbolInternal::Terminal(TerminalSymbol::Error)
             }).collect(),
             generator: Box::new(generator),
