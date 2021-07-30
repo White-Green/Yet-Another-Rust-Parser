@@ -1,9 +1,9 @@
 use proc_macro::TokenStream;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap};
 use std::str::FromStr;
 
 use proc_macro2::{Delimiter, Group};
-use quote::{quote, TokenStreamExt, ToTokens};
+use quote::{quote, ToTokens};
 use syn::{braced, bracketed, Expr, ExprClosure, ExprTuple, Field, Fields, FieldValue, Ident, parenthesized, parse_macro_input, Token, token};
 use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
