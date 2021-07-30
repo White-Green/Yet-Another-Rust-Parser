@@ -3,7 +3,6 @@ use std::fmt::{Debug, Formatter};
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;
-use std::rc::Rc;
 
 use enum_index::EnumIndex;
 

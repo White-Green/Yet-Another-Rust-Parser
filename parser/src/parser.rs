@@ -1,7 +1,6 @@
 use std::cmp::Ordering;
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::hash::{Hash, Hasher};
-use std::rc::Rc;
 
 use enum_index::EnumIndex;
 
@@ -384,7 +383,6 @@ impl<N: EnumIndex, T: EnumIndex> From<Syntax<N, T>> for LR1Parser<N, T> {
 mod tests {
     use std::collections::{HashMap, HashSet, VecDeque};
     use std::fmt::Debug;
-    use std::rc::Rc;
 
     use enum_index::EnumIndex;
     use enum_index_derive::*;

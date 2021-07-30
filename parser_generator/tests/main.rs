@@ -1,5 +1,5 @@
-use parser::{enum_index, Parse};
 use parser::enum_index_derive::EnumIndex;
+use parser::{enum_index, Parse};
 use parser_generator::parser;
 
 #[derive(Debug, PartialEq, EnumIndex, Clone)]
@@ -58,12 +58,16 @@ parser! {
 #[test]
 fn test_parser_generator() {
     let parser = get_parser();
-    use Terminal::*;
     use NonTerminal::*;
-    assert_eq!(vec![Number(1), Plus, Number(2), Star, Number(3), Plus, Number(4)].into_iter().parse(&parser),
-               Ok(E(vec![
-                   T(vec![F(Number(1))]),
-                   T(vec![F(Number(2)), F(Number(3))]),
-                   T(vec![F(Number(4))]),
-               ])));
+    use Terminal::*;
+    assert_eq!(
+        vec![Number(1), Plus, Number(2), Star, Number(3), Plus, Number(4)]
+            .into_iter()
+            .parse(&parser),
+        Ok(E(vec![
+            T(vec![F(Number(1))]),
+            T(vec![F(Number(2)), F(Number(3))]),
+            T(vec![F(Number(4))]),
+        ]))
+    );
 }
