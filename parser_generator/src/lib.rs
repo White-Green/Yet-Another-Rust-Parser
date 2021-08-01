@@ -272,7 +272,7 @@ pub fn parser(input: TokenStream) -> TokenStream {
             let value_constructor = value.into_iter().map(|(key, value)| {
                 let key = match key {
                     TerminalSymbol::Symbol(s) => {
-                        quote! { parser::TerminalSymbol::Symbol(symbols[#s]) }
+                        quote! { parser::TerminalSymbol::Symbol(tokens[#s]) }
                     }
                     TerminalSymbol::Error => quote! { parser::TerminalSymbol::Error },
                     TerminalSymbol::EOI => quote! { parser::TerminalSymbol::EOI },
@@ -366,11 +366,9 @@ pub fn parser(input: TokenStream) -> TokenStream {
     let tokens = tokens.items.iter(); //.map(|token| dbg!(quote! { #token_type_name::#token }));
     let symbols = symbols.items.iter(); //.map(|symbol|quote!{ #symbol_type_name::#symbol });
     let result = quote! {
-        fn get_parser() -> parser::LR1Parser<#symbol_type_name, #token_type_name>{
-            use #token_type_name::*;
-            use #symbol_type_name::*;
-            let tokens = [#(parser::enum_index::EnumIndex::enum_index(&(#tokens))),*];
-            let symbols = [#(parser::enum_index::EnumIndex::enum_index(&(#symbols))),*];
+        pub fn get_parser() -> parser::LR1Parser<#symbol_type_name, #token_type_name>{
+            let tokens = [#(parser::enum_index::EnumIndex::enum_index(&(#token_type_name::#tokens))),*];
+            let symbols = [#(parser::enum_index::EnumIndex::enum_index(&(#symbol_type_name::#symbols))),*];
             let action_table = #action_table_constructor;
             let goto_table = #goto_table_constructor;
             let error_rules = #error_rules_constructor;
