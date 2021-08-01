@@ -106,15 +106,15 @@ fn calc_goto<N, T>(set: &StateInterop, syntax: &Syntax<N, T>, null: &NullSetInte
     for item in set {
         if let Some(symbol) = syntax.rules[item.rule].symbols.get(item.position) {
             goto.entry(symbol.clone())
-                .or_insert_with(|| BTreeSet::new())
+                .or_insert_with(BTreeSet::new)
                 .insert(LR1ItemInterop {
-                    rule: item.rule.clone(),
+                    rule: item.rule,
                     position: item.position + 1,
                     lookahead_symbol: item.lookahead_symbol.clone(),
                 });
         }
     }
-    for (_, set) in &mut goto {
+    for set in goto.values_mut() {
         calc_closure(set, syntax, null, first);
     }
     goto
@@ -124,7 +124,7 @@ fn calc_closure<N, T>(set: &mut StateInterop, syntax: &Syntax<N, T>, null: &Null
     let mut rules = HashMap::new();
     for (rule_index, rule) in syntax.rules.iter().enumerate() {
         rules.entry(rule.non_terminal)
-            .or_insert_with(|| BTreeSet::new())
+            .or_insert_with(BTreeSet::new)
             .insert(rule_index);
     }
     loop {
@@ -193,7 +193,7 @@ fn calc_first<N, T>(syntax: &Syntax<N, T>, null: &NullSetInterop) -> FirstSetInt
         for symbol in &rule.symbols {
             if let SymbolInternal::Terminal(t) = symbol {
                 first.entry(symbol.clone())
-                    .or_insert_with(|| BTreeSet::new())
+                    .or_insert_with(BTreeSet::new)
                     .insert(t.clone());
             }
         }
@@ -204,13 +204,13 @@ fn calc_first<N, T>(syntax: &Syntax<N, T>, null: &NullSetInterop) -> FirstSetInt
         for rule in &syntax.rules {
             let mut update = BTreeSet::new();
             for symbol in &rule.symbols {
-                if let Some(first) = first.get(&symbol) {
+                if let Some(first) = first.get(symbol) {
                     first.iter().cloned().for_each(|item| { update.insert(item); });
                 }
-                if !null.contains(&symbol) { break; }
+                if !null.contains(symbol) { break; }
             }
             let set = first.entry(SymbolInternal::NonTerminal(rule.non_terminal))
-                .or_insert_with(|| BTreeSet::new());
+                .or_insert_with(BTreeSet::new);
             for item in update {
                 updated |= set.insert(item);
             }
@@ -249,7 +249,7 @@ fn calc_table<N, T>(state_list: HashMap<StateInterop, GotoListInterop>, start_ru
                     match action.get(&item.lookahead_symbol) {
                         None => { action.insert(item.lookahead_symbol, Action::Reduce(item.rule)); }
                         Some(Action::Shift(shift)) => { warnings.push(CalcTableWarning::ShiftReduce { state: current_state.clone(), shift: shift.clone(), reduce: item.rule }); }
-                        Some(Action::Reduce(reduce)) => { warnings.push(CalcTableWarning::ReduceReduce { state: current_state.clone(), actions: [reduce.clone(), item.rule] }); }
+                        Some(Action::Reduce(reduce)) => { warnings.push(CalcTableWarning::ReduceReduce { state: current_state.clone(), actions: [*reduce, item.rule] }); }
                         Some(Action::Accept) => unreachable!(),
                     }
                 }
@@ -269,8 +269,8 @@ fn calc_all_goto<N, T>(syntax: &Syntax<N, T>, start_state: StateInterop, null: &
     let mut state_list = HashMap::new();
     while let Some(state) = q.pop_front() {
         if state_list.contains_key(&state) { continue; }
-        let goto = calc_goto(&state, &syntax, &null, &first);
-        for (_, new_state) in &goto {
+        let goto = calc_goto(&state, syntax, null, first);
+        for new_state in goto.values() {
             q.push_back(new_state.clone());
         }
         state_list.insert(state, goto);
@@ -320,15 +320,13 @@ impl<N: EnumIndex, T: EnumIndex> LR1Parser<N, T> {
         syntax.rules.push(Rule::builder_raw(start_symbol).non_terminal_raw(syntax.start).build(|_| unimplemented!()));
         let null = calc_null(&syntax);
         let first = calc_first(&syntax, &null);
-        let mut start_state = vec![LR1ItemInterop { rule: start_rule.clone(), position: 0, lookahead_symbol: TerminalSymbol::EOI }].into_iter().collect();
+        let mut start_state = vec![LR1ItemInterop { rule: start_rule, position: 0, lookahead_symbol: TerminalSymbol::EOI }].into_iter().collect();
         calc_closure(&mut start_state, &syntax, &null, &first);
         let state_list = calc_all_goto(&syntax, start_state.clone(), &null, &first);
 
         let mut state_index = HashMap::new();
-        let mut i = 0usize;
-        for (state, _) in &state_list {
+        for (i, state) in state_list.keys().enumerate() {
             state_index.insert(state.clone(), i);
-            i += 1;
         }
         let (action_table, goto_table, warnings) = calc_table(state_list, start_rule, &syntax.rules);
         let mut action_table: HashMap<_, _> = action_table.into_iter()
@@ -358,7 +356,7 @@ impl<N: EnumIndex, T: EnumIndex> LR1Parser<N, T> {
             ))
             .collect();
         let to_external = |state: StateInterop| {
-            state.into_iter().map(|LR1ItemInterop { rule, position, lookahead_symbol }| LR1Item { rule: rule, position, lookahead_symbol }).collect::<BTreeSet<_>>()
+            state.into_iter().map(|LR1ItemInterop { rule, position, lookahead_symbol }| LR1Item { rule, position, lookahead_symbol }).collect::<BTreeSet<_>>()
         };
         let warnings = warnings.into_iter()
             .map(|warning| match warning {

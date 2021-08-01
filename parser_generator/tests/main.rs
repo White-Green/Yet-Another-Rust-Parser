@@ -3,13 +3,13 @@ use parser::{enum_index, Parse};
 use parser_generator::parser;
 
 #[derive(Debug, PartialEq, EnumIndex, Clone)]
-enum Terminal {
+pub enum Terminal {
     Number(usize),
     Plus,
     Star,
 }
 #[derive(Debug, PartialEq, EnumIndex)]
-enum NonTerminal {
+pub enum NonTerminal {
     E(Vec<NonTerminal>),
     T(Vec<NonTerminal>),
     F(Terminal),
@@ -26,32 +26,32 @@ parser! {
     symbol NonTerminal{
         E(Vec::new(),),
         T(Vec::new(),),
-        F(Plus,),
+        F(Terminal::Plus,),
     }
     E
     <E>::=(<E>[Plus]<T>)                  (|list|
-                    if let [Symbol::NonTerminal(E(vec)), _, Symbol::NonTerminal(T(v))] = *list {
+                    if let [Symbol::NonTerminal(NonTerminal::E(vec)), _, Symbol::NonTerminal(NonTerminal::T(v))] = *list {
                         let mut vec = std::mem::take(vec);
-                        vec.push(T(std::mem::take(v)));
-                        E(vec)
+                        vec.push(NonTerminal::T(std::mem::take(v)));
+                        NonTerminal::E(vec)
                     } else { unreachable!() })
     <E>::=(<T>)                         (|list|
-                    if let [Symbol::NonTerminal(T(vec))] = *list {
-                        E(vec![T(std::mem::take(vec))])
+                    if let [Symbol::NonTerminal(NonTerminal::T(vec))] = *list {
+                        NonTerminal::E(vec![NonTerminal::T(std::mem::take(vec))])
                     } else { unreachable!() })
     <T>::=(<T>[Star]<F>)                  (|list|
-                    if let [Symbol::NonTerminal(T(vec)), _, Symbol::NonTerminal(f)] = &mut *list {
+                    if let [Symbol::NonTerminal(NonTerminal::T(vec)), _, Symbol::NonTerminal(f)] = &mut *list {
                         let mut vec = std::mem::take(vec);
-                        vec.push(std::mem::replace(f, F(Number(0))));
-                        T(vec)
+                        vec.push(std::mem::replace(f, NonTerminal::F(Terminal::Number(0))));
+                        NonTerminal::T(vec)
                     } else { unreachable!() })
     <T>::=(<F>)                         (|list|
                     if let [Symbol::NonTerminal(f)] = list {
-                        T(vec![std::mem::replace(f, F(Number(0)))])
+                        NonTerminal::T(vec![std::mem::replace(f, NonTerminal::F(Terminal::Number(0)))])
                     } else { unreachable!() })
     <F>::=([Number])                         (|list|
                     if let [Symbol::Terminal(n)] = list {
-                        F(n.clone())
+                        NonTerminal::F(n.clone())
                     } else { unreachable!() })
 }
 

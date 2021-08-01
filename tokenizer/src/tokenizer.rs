@@ -71,6 +71,12 @@ pub struct TokenizerBuilder<E, T> {
     patterns: Vec<(String, Box<dyn Fn(&str, Vec<T>) -> E>)>,
 }
 
+impl<E, T> Default for TokenizerBuilder<E, T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<E, T> TokenizerBuilder<E, T> {
     pub fn new() -> Self {
         Self { patterns: Vec::new() }
@@ -83,9 +89,9 @@ impl<E, T> TokenizerBuilder<E, T> {
 
     pub fn build(self) -> Result<(DFATokenizer<E, T>, Vec<TokenizerBuildWarning>), TokenizerBuildError> {
         let (regex, functions): (Vec<_>, Vec<_>) = self.patterns.into_iter().unzip();
-        let nfa = TokenizerNFA::try_from(regex.iter().map(|s| s.deref()).collect::<Vec<&str>>()).map_err(|e| TokenizerBuildError::NFAConstructError(e))?;
+        let nfa = TokenizerNFA::try_from(regex.iter().map(|s| s.deref()).collect::<Vec<&str>>()).map_err(TokenizerBuildError::NFAConstructError)?;
         let (dfa, warnings) = nfa.into();
         let dfa = dfa.minify();
-        Ok((DFATokenizer::new(dfa, functions), warnings.into_iter().map(|i| TokenizerBuildWarning::DFAConstructWarning(i)).collect()))
+        Ok((DFATokenizer::new(dfa, functions), warnings.into_iter().map(TokenizerBuildWarning::DFAConstructWarning).collect()))
     }
 }

@@ -125,9 +125,9 @@ impl<'a> TryFrom<Vec<&str>> for TokenizerNFA<'a> {
         let mut hir = Vec::new();
         for pattern in value {
             let mut parser = regex_syntax::Parser::new();
-            hir.push(parser.parse(pattern).map_err(|e| NFARegexConstructError::RegexError(e))?);
+            hir.push(parser.parse(pattern).map_err(NFARegexConstructError::RegexError)?);
         }
-        Self::try_from(hir).map_err(|e| NFARegexConstructError::ConstructError(e))
+        Self::try_from(hir).map_err(NFARegexConstructError::ConstructError)
     }
 }
 

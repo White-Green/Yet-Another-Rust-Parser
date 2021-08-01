@@ -1,6 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::hash::{Hash, Hasher};
-use std::iter::FromIterator;
 use std::marker::PhantomData;
 use std::mem::swap;
 use std::ops::Deref;
@@ -95,10 +94,10 @@ impl<'a, 'b> From<TokenizerNFA<'a>> for (TokenizerDFA<'b>, Vec<DFAConstructWarni
             for node in &current_node {
                 for (char_range, next_node) in node.next() {
                     next.entry(char_range.range.start)
-                        .or_insert_with(|| BTreeMap::new())
+                        .or_insert_with(BTreeMap::new)
                         .entry(char_range.range.end)
-                        .or_insert_with(|| BTreeSet::new())
-                        .append(&mut BTreeSet::from_iter(next_node.iter().map(|node| node.epsilon_recursive()).flatten()));
+                        .or_insert_with(BTreeSet::new)
+                        .append(&mut next_node.iter().map(|node| node.epsilon_recursive()).flatten().collect::<BTreeSet<_>>());
                 }
             }
 
@@ -124,7 +123,7 @@ impl<'a, 'b> From<TokenizerNFA<'a>> for (TokenizerDFA<'b>, Vec<DFAConstructWarni
                 .iter()
                 .zip(0..nfa.end().len())
                 .rev() {
-                if set.contains(&nfa_node) {
+                if set.contains(nfa_node) {
                     if let Some(old) = end.insert(node[index].reference(), i) {
                         warnings.push(DFAConstructWarning::EndConflict(old, i));
                     }
@@ -155,7 +154,7 @@ impl<'a> TokenizerDFA<'a> {
                     let node_next = &(*node).next;
                     let compressed_next = Self::compress_next(&group_map, node_next);
                     split_group.entry(compressed_next)
-                        .or_insert_with(|| HashSet::new())
+                        .or_insert_with(HashSet::new)
                         .insert(node.reference());
                 }
                 updated |= split_group.len() > 1;
@@ -175,7 +174,7 @@ impl<'a> TokenizerDFA<'a> {
             node.push(Box::pin(TokenizerDFANode::new()));
         }
         for (set, i) in group_set.iter().zip(0..) {
-            let map = Self::compress_next(&new_group_map, &(*set.into_iter().next().unwrap()).next);
+            let map = Self::compress_next(&new_group_map, &(*set.iter().next().unwrap()).next);
             node[i].next = map.into_iter().map(|(k, v)| (k, node[v].reference())).collect();
         }
         let begin = node[new_group_map[&self.begin]].reference();
@@ -191,7 +190,7 @@ impl<'a> TokenizerDFA<'a> {
         let mut group_set = Vec::new();
         for (node_ref, &group) in group_map.iter() {
             if group >= group_set.len() {
-                group_set.resize_with(group + 1, || HashSet::new());
+                group_set.resize_with(group + 1, HashSet::new);
             }
             group_set[group].insert(node_ref.reference());
         }
@@ -204,17 +203,19 @@ impl<'a> TokenizerDFA<'a> {
         let mut prev_end = None;
         let mut prev_group = None;
         for (range, next) in node_next {
-            let current_group = group_map[&next];
-            if prev_group.is_some() && (prev_group != Some(current_group) || prev_end != Some(range.range.start)) {
-                compressed_next.insert(CharRange { range: prev_begin.unwrap()..prev_end.unwrap() }, prev_group.unwrap());
-                prev_begin = None;
+            let current_group = group_map[next];
+            if let Some(prev_group) = prev_group {
+                if prev_group != current_group || prev_end != Some(range.range.start) {
+                    compressed_next.insert(CharRange { range: prev_begin.unwrap()..prev_end.unwrap() }, prev_group);
+                    prev_begin = None;
+                }
             }
             prev_begin = prev_begin.or(Some(range.range.start));
             prev_end = Some(range.range.end);
             prev_group = Some(current_group);
         }
-        if prev_group.is_some() {
-            compressed_next.insert(CharRange { range: prev_begin.unwrap()..prev_end.unwrap() }, prev_group.unwrap());
+        if let Some(prev_group) = prev_group {
+            compressed_next.insert(CharRange { range: prev_begin.unwrap()..prev_end.unwrap() }, prev_group);
         }
         compressed_next
     }
@@ -222,7 +223,7 @@ impl<'a> TokenizerDFA<'a> {
 
 impl<'a> TokenizerDFA<'a> {
     fn align_by_begin(next_begin_map: &mut Vec<(u32, BTreeMap<u32, BTreeSet<TokenizerNFANodeRef>>)>) {
-        if next_begin_map.len() <= 0 { return; }
+        if next_begin_map.is_empty() { return; }
         for i in 0..next_begin_map.len() - 1 {
             let upper = next_begin_map[i + 1].0;
             let greater_keys = next_begin_map[i].1.range(upper + 1..)
@@ -237,11 +238,11 @@ impl<'a> TokenizerDFA<'a> {
                     limit_next.append(&mut greater_next);
                 }
                 next_begin_map[i].1.entry(upper)
-                    .or_insert_with(|| BTreeSet::new())
+                    .or_insert_with(BTreeSet::new)
                     .append(&mut limit_next);
                 for (end, mut greater_next) in greater_end_map {
                     next_begin_map[i + 1].1.entry(end)
-                        .or_insert_with(|| BTreeSet::new())
+                        .or_insert_with(BTreeSet::new)
                         .append(&mut greater_next);
                 }
             }
@@ -253,7 +254,7 @@ impl<'a> TokenizerDFA<'a> {
         for (begin, mut end_map) in next_begin_map {
             let mut vec = Vec::new();
             let mut begin = begin;
-            for (end, _) in &end_map {
+            for end in end_map.keys() {
                 vec.push((CharRange { range: begin..*end }, BTreeSet::new()));
                 begin = *end;
             }
