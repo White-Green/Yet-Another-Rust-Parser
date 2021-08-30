@@ -2,10 +2,10 @@ use std::collections::{BTreeMap, HashMap};
 use std::convert::TryFrom;
 use std::ops::Deref;
 
-use crate::CharRange;
 use crate::dfa::{DFAConstructWarning, TokenizerDFA};
 use crate::nfa::{NFARegexConstructError, TokenizerNFA};
 use crate::tokenizer::iter::Tokenizer;
+use crate::CharRange;
 
 pub(crate) mod iter;
 
@@ -19,19 +19,35 @@ pub struct DFATokenizer<E, T> {
 impl<E, T> Tokenizer for DFATokenizer<E, T> {
     type Input = T;
     type Output = E;
-    fn begin(&self) -> usize { self.begin }
-    fn accept_index(&self, node: usize) -> Option<usize> { self.get_accept_index(node) }
-    fn next_node(&self, node: usize, token: char) -> Option<usize> { self.get_next_node(node, token) }
-    fn enum_maker(&self, pattern: usize) -> &dyn Fn(&str, Vec<T>) -> E { &self.enum_maker[pattern] }
+    fn begin(&self) -> usize {
+        self.begin
+    }
+    fn accept_index(&self, node: usize) -> Option<usize> {
+        self.get_accept_index(node)
+    }
+    fn next_node(&self, node: usize, token: char) -> Option<usize> {
+        self.get_next_node(node, token)
+    }
+    fn enum_maker(&self, pattern: usize) -> &dyn Fn(&str, Vec<T>) -> E {
+        &self.enum_maker[pattern]
+    }
 }
 
 impl<E, T> Tokenizer for &DFATokenizer<E, T> {
     type Input = T;
     type Output = E;
-    fn begin(&self) -> usize { self.begin }
-    fn accept_index(&self, node: usize) -> Option<usize> { self.get_accept_index(node) }
-    fn next_node(&self, node: usize, token: char) -> Option<usize> { self.get_next_node(node, token) }
-    fn enum_maker(&self, pattern: usize) -> &dyn Fn(&str, Vec<T>) -> E { &self.enum_maker[pattern] }
+    fn begin(&self) -> usize {
+        self.begin
+    }
+    fn accept_index(&self, node: usize) -> Option<usize> {
+        self.get_accept_index(node)
+    }
+    fn next_node(&self, node: usize, token: char) -> Option<usize> {
+        self.get_next_node(node, token)
+    }
+    fn enum_maker(&self, pattern: usize) -> &dyn Fn(&str, Vec<T>) -> E {
+        &self.enum_maker[pattern]
+    }
 }
 
 impl<E, T> DFATokenizer<E, T> {
@@ -59,12 +75,12 @@ impl<E, T> DFATokenizer<E, T> {
 
 #[derive(Debug, Clone)]
 pub enum TokenizerBuildError {
-    NFAConstructError(NFARegexConstructError)
+    NFAConstructError(NFARegexConstructError),
 }
 
 #[derive(Debug, Clone)]
 pub enum TokenizerBuildWarning {
-    DFAConstructWarning(DFAConstructWarning)
+    DFAConstructWarning(DFAConstructWarning),
 }
 
 pub struct TokenizerBuilder<E, T> {

@@ -11,8 +11,10 @@ pub trait Tokenizer {
 }
 
 pub struct TokenizeIterator<I: Iterator, F, T>
-    where F: FnMut(&I::Item) -> char,
-          T: Tokenizer<Input=I::Item> {
+where
+    F: FnMut(&I::Item) -> char,
+    T: Tokenizer<Input = I::Item>,
+{
     iter: I,
     queue: VecDeque<I::Item>,
     map: F,
@@ -20,31 +22,26 @@ pub struct TokenizeIterator<I: Iterator, F, T>
 }
 
 pub trait Tokenize: Sized + Iterator {
-    fn tokenize<T: Tokenizer<Input=Self::Item>>(self, tokenizer: T) -> TokenizeIterator<Self, fn(&char) -> char, T> where Self: Iterator<Item=char>;
-    fn tokenize_with<T: Tokenizer<Input=Self::Item>, F: FnMut(&Self::Item) -> char>(self, tokenizer: T, map: F) -> TokenizeIterator<Self, F, T>;
+    fn tokenize<T: Tokenizer<Input = Self::Item>>(self, tokenizer: T) -> TokenizeIterator<Self, fn(&char) -> char, T>
+    where
+        Self: Iterator<Item = char>;
+    fn tokenize_with<T: Tokenizer<Input = Self::Item>, F: FnMut(&Self::Item) -> char>(self, tokenizer: T, map: F) -> TokenizeIterator<Self, F, T>;
 }
 
 impl<I: Iterator> Tokenize for I {
-    fn tokenize<T: Tokenizer<Input=Self::Item>>(self, tokenizer: T) -> TokenizeIterator<Self, fn(&char) -> char, T> where Self: Iterator<Item=char> {
-        TokenizeIterator {
-            iter: self,
-            queue: VecDeque::new(),
-            map: char::clone,
-            tokenizer,
-        }
+    fn tokenize<T: Tokenizer<Input = Self::Item>>(self, tokenizer: T) -> TokenizeIterator<Self, fn(&char) -> char, T>
+    where
+        Self: Iterator<Item = char>,
+    {
+        TokenizeIterator { iter: self, queue: VecDeque::new(), map: char::clone, tokenizer }
     }
 
-    fn tokenize_with<T: Tokenizer<Input=Self::Item>, F: FnMut(&Self::Item) -> char>(self, tokenizer: T, map: F) -> TokenizeIterator<Self, F, T> {
-        TokenizeIterator {
-            iter: self,
-            queue: VecDeque::new(),
-            map,
-            tokenizer,
-        }
+    fn tokenize_with<T: Tokenizer<Input = Self::Item>, F: FnMut(&Self::Item) -> char>(self, tokenizer: T, map: F) -> TokenizeIterator<Self, F, T> {
+        TokenizeIterator { iter: self, queue: VecDeque::new(), map, tokenizer }
     }
 }
 
-impl<I: Iterator, F: FnMut(&I::Item) -> char, T: Tokenizer<Input=I::Item>> Iterator for TokenizeIterator<I, F, T> {
+impl<I: Iterator, F: FnMut(&I::Item) -> char, T: Tokenizer<Input = I::Item>> Iterator for TokenizeIterator<I, F, T> {
     type Item = T::Output;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -84,8 +81,8 @@ impl<I: Iterator, F: FnMut(&I::Item) -> char, T: Tokenizer<Input=I::Item>> Itera
 
 #[cfg(test)]
 mod tests {
-    use crate::tokenizer::DFATokenizer;
     use crate::tokenizer::iter::Tokenize;
+    use crate::tokenizer::DFATokenizer;
 
     #[test]
     fn tokenize_iterator() {
@@ -96,43 +93,20 @@ mod tests {
             C(String),
         }
         use Token::*;
-        let tokenizer = || DFATokenizer::builder()
-            .pattern("[a-zA-Z_][a-zA-Z0-9_]*", |s, _| Token::A(s.to_string()))
-            .pattern("0([xX][0-9a-fA-F]+|[dD][0-9]+|[oO][0-7]+|[bB][01]+)|[1-9][0-9]*|0", |s, _| Token::B(s.to_string()))
-            .pattern(".|\n", |s, _| Token::C(s.to_string()))
-            .build().unwrap().0;
+        let tokenizer = || {
+            DFATokenizer::builder()
+                .pattern("[a-zA-Z_][a-zA-Z0-9_]*", |s, _| Token::A(s.to_string()))
+                .pattern("0([xX][0-9a-fA-F]+|[dD][0-9]+|[oO][0-7]+|[bB][01]+)|[1-9][0-9]*|0", |s, _| Token::B(s.to_string()))
+                .pattern(".|\n", |s, _| Token::C(s.to_string()))
+                .build()
+                .unwrap()
+                .0
+        };
         let tokens = "let mut test = 0xFF;".chars().tokenize(tokenizer()).collect::<Vec<_>>();
-        assert_eq!(
-            tokens,
-            vec![
-                A("let".to_string()),
-                C(" ".to_string()),
-                A("mut".to_string()),
-                C(" ".to_string()),
-                A("test".to_string()),
-                C(" ".to_string()),
-                C("=".to_string()),
-                C(" ".to_string()),
-                B("0xFF".to_string()),
-                C(";".to_string()),
-            ]
-        );
+        assert_eq!(tokens, vec![A("let".to_string()), C(" ".to_string()), A("mut".to_string()), C(" ".to_string()), A("test".to_string()), C(" ".to_string()), C("=".to_string()), C(" ".to_string()), B("0xFF".to_string()), C(";".to_string()),]);
 
         let tokens = "1+0b10+0o7+0d9+0xf".chars().tokenize(tokenizer()).collect::<Vec<_>>();
-        assert_eq!(
-            tokens,
-            vec![
-                B("1".to_string()),
-                C("+".to_string()),
-                B("0b10".to_string()),
-                C("+".to_string()),
-                B("0o7".to_string()),
-                C("+".to_string()),
-                B("0d9".to_string()),
-                C("+".to_string()),
-                B("0xf".to_string()),
-            ]
-        );
+        assert_eq!(tokens, vec![B("1".to_string()), C("+".to_string()), B("0b10".to_string()), C("+".to_string()), B("0o7".to_string()), C("+".to_string()), B("0d9".to_string()), C("+".to_string()), B("0xf".to_string()),]);
 
         let tokens = "01+0b2+0o8+0da+0xg".chars().tokenize(tokenizer()).collect::<Vec<_>>();
         assert_eq!(
@@ -165,13 +139,18 @@ mod tests {
             C(String, usize, usize),
         }
         use Token::*;
-        let tokenizer = || DFATokenizer::builder()
-            .pattern("[a-zA-Z_][a-zA-Z0-9_]*", |s, a: Vec<(char, _)>| Token::A(s.to_string(), a[0].1, a.len()))
-            .pattern("0([xX][0-9a-fA-F]+|[dD][0-9]+|[oO][0-7]+|[bB][01]+)|[1-9][0-9]*|0", |s, a| Token::B(s.to_string(), a[0].1, a.len()))
-            .pattern(".|\n", |s, a| Token::C(s.to_string(), a[0].1, a.len()))
-            .build().unwrap().0;
+        let tokenizer = || {
+            DFATokenizer::builder()
+                .pattern("[a-zA-Z_][a-zA-Z0-9_]*", |s, a: Vec<(char, _)>| Token::A(s.to_string(), a[0].1, a.len()))
+                .pattern("0([xX][0-9a-fA-F]+|[dD][0-9]+|[oO][0-7]+|[bB][01]+)|[1-9][0-9]*|0", |s, a| Token::B(s.to_string(), a[0].1, a.len()))
+                .pattern(".|\n", |s, a| Token::C(s.to_string(), a[0].1, a.len()))
+                .build()
+                .unwrap()
+                .0
+        };
 
-        let tokens = "let mut test = 0xFF;".chars()
+        let tokens = "let mut test = 0xFF;"
+            .chars()
             .scan(0, |state, item| {
                 let i = *state;
                 *state += 1;
@@ -195,7 +174,8 @@ mod tests {
             ]
         );
 
-        let tokens = "1+0b10+0o7+0d9+0xf".chars()
+        let tokens = "1+0b10+0o7+0d9+0xf"
+            .chars()
             .scan(0, |state, item| {
                 let i = *state;
                 *state += 1;
@@ -218,7 +198,8 @@ mod tests {
             ]
         );
 
-        let tokens = "01+0b2+0o8+0da+0xg".chars()
+        let tokens = "01+0b2+0o8+0da+0xg"
+            .chars()
             .scan(0, |state, item| {
                 let i = *state;
                 *state += 1;

@@ -7,13 +7,13 @@ pub use crate::iter::{Parse, ParseError};
 pub use crate::parser::{Action, LR1Parser};
 pub use crate::syntax::{Rule, Syntax, TerminalSymbol};
 
+mod iter;
 mod parser;
 mod syntax;
-mod iter;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub enum Symbol<N, T> {
+pub enum Symbol<N, T, E> {
     NonTerminal(N),
     Terminal(T),
-    Error,
+    Error(E),
 }

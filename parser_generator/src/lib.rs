@@ -1,24 +1,25 @@
 use proc_macro::TokenStream;
 use std::collections::HashMap;
 use std::str::FromStr;
+use std::time::Instant;
 
 use proc_macro2::{Delimiter, Group};
 use quote::{quote, ToTokens};
 use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
-use syn::{
-    braced, bracketed, parenthesized, parse_macro_input, token, ExprClosure, ExprTuple, FieldValue,
-    Ident, Token,
-};
+use syn::{braced, bracketed, parenthesized, parse_macro_input, token, ExprClosure, ExprTuple, FieldValue, Ident, Token, Type};
 
 use parser::enum_index::EnumIndex;
 use parser::{Action, LR1Parser, Rule, Symbol, Syntax, TerminalSymbol};
 
+mod kw {
+    syn::custom_keyword!(token);
+    syn::custom_keyword!(symbol);
+    syn::custom_keyword!(ERROR);
+}
+
 enum EnumValue {
-    Named {
-        _brace: token::Brace,
-        values: Punctuated<FieldValue, Token![,]>,
-    },
+    Named { _brace: token::Brace, values: Punctuated<FieldValue, Token![,]> },
     Unnamed(ExprTuple),
     None,
 }
@@ -42,9 +43,7 @@ impl Parse for EnumValue {
 impl ToTokens for EnumValue {
     fn to_tokens(&self, tokens: &mut proc_macro2::TokenStream) {
         match self {
-            EnumValue::Named { _brace, values } => {
-                Group::new(Delimiter::Brace, values.to_token_stream()).to_tokens(tokens)
-            }
+            EnumValue::Named { _brace, values } => Group::new(Delimiter::Brace, values.to_token_stream()).to_tokens(tokens),
             EnumValue::Unnamed(tuple) => tuple.to_tokens(tokens),
             EnumValue::None => {}
         }
@@ -58,10 +57,7 @@ struct EnumItem {
 
 impl Parse for EnumItem {
     fn parse(input: ParseStream) -> syn::Result<Self> {
-        Ok(EnumItem {
-            name: input.parse()?,
-            value: input.parse()?,
-        })
+        Ok(EnumItem { name: input.parse()?, value: input.parse()? })
     }
 }
 
@@ -72,18 +68,18 @@ impl ToTokens for EnumItem {
     }
 }
 
-struct ItemsList {
-    prefix: Ident,
+struct ItemsList<Prefix> {
+    _prefix: Prefix,
     token_enum_name: Ident,
     _brace: token::Brace,
     items: Punctuated<EnumItem, Token![,]>,
 }
 
-impl Parse for ItemsList {
+impl<P: Parse> Parse for ItemsList<P> {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let content;
         Ok(ItemsList {
-            prefix: input.parse()?,
+            _prefix: input.parse()?,
             token_enum_name: input.parse()?,
             _brace: braced!(content in input),
             items: content.parse_terminated(EnumItem::parse)?,
@@ -92,31 +88,20 @@ impl Parse for ItemsList {
 }
 
 enum BNFSymbol {
-    Terminal {
-        _bracket: token::Bracket,
-        name: Ident,
-    },
-    NonTerminal {
-        _open: Token![<],
-        name: Ident,
-        _close: Token![>],
-    },
+    Terminal { _bracket: token::Bracket, name: Ident },
+    NonTerminal { _open: Token![<], name: Ident, _close: Token![>] },
+    Error(kw::ERROR),
 }
 
 impl Parse for BNFSymbol {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         if input.peek(Token![<]) {
-            Ok(BNFSymbol::NonTerminal {
-                _open: input.parse()?,
-                name: input.parse()?,
-                _close: input.parse()?,
-            })
+            Ok(BNFSymbol::NonTerminal { _open: input.parse()?, name: input.parse()?, _close: input.parse()? })
+        } else if input.peek(kw::ERROR) {
+            Ok(BNFSymbol::Error(input.parse()?))
         } else {
             let content;
-            Ok(BNFSymbol::Terminal {
-                _bracket: bracketed!(content in input),
-                name: content.parse()?,
-            })
+            Ok(BNFSymbol::Terminal { _bracket: bracketed!(content in input), name: content.parse()? })
         }
     }
 }
@@ -160,8 +145,10 @@ impl Parse for BNFRule {
 }
 
 struct ParserGeneratorInput {
-    tokens: ItemsList,
-    symbols: ItemsList,
+    tokens: ItemsList<kw::token>,
+    symbols: ItemsList<kw::symbol>,
+    _bracket: token::Paren,
+    error: Type,
     start: Ident,
     rules: Vec<BNFRule>,
 }
@@ -169,10 +156,13 @@ struct ParserGeneratorInput {
 impl Parse for ParserGeneratorInput {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let mut rules = Vec::new();
+        let content;
         Ok(ParserGeneratorInput {
             tokens: input.parse()?,
             symbols: input.parse()?,
             start: input.parse()?,
+            _bracket: parenthesized!(content in input),
+            error: content.parse()?,
             rules: loop {
                 if input.is_empty() {
                     break rules;
@@ -194,37 +184,13 @@ impl EnumIndex for AnonymousSymbol {
 
 #[proc_macro]
 pub fn parser(input: TokenStream) -> TokenStream {
-    let ParserGeneratorInput {
-        tokens,
-        symbols,
-        start,
-        rules,
-    } = parse_macro_input!(input as ParserGeneratorInput);
-    if tokens.prefix.to_string() != "token" {
-        return TokenStream::from_str("compile_error!()").unwrap();
-    }
-    if symbols.prefix.to_string() != "symbol" {
-        return TokenStream::from_str("compile_error!()").unwrap();
-    }
+    let ParserGeneratorInput { tokens, symbols, error, start, rules, .. } = parse_macro_input!(input as ParserGeneratorInput);
     let token_type_name = tokens.token_enum_name;
-    let token_name_map = tokens
-        .items
-        .iter()
-        .enumerate()
-        .map(|(i, EnumItem { name, .. })| (name.to_string(), i))
-        .collect::<HashMap<_, _>>();
+    let token_name_map = tokens.items.iter().enumerate().map(|(i, EnumItem { name, .. })| (name.to_string(), i)).collect::<HashMap<_, _>>();
     let symbol_type_name = symbols.token_enum_name;
-    let symbol_name_map = symbols
-        .items
-        .iter()
-        .enumerate()
-        .map(|(i, EnumItem { name, .. })| (name.to_string(), i))
-        .collect::<HashMap<_, _>>();
+    let symbol_name_map = symbols.items.iter().enumerate().map(|(i, EnumItem { name, .. })| (name.to_string(), i)).collect::<HashMap<_, _>>();
     let mut syntax = Syntax::<AnonymousSymbol, AnonymousSymbol>::builder();
-    for BNFRule {
-        non_terminal, rule, ..
-    } in &rules
-    {
+    for BNFRule { non_terminal, rule, .. } in &rules {
         let start = if let Some(start) = symbol_name_map.get(&non_terminal.to_string()) {
             *start
         } else {
@@ -233,35 +199,18 @@ pub fn parser(input: TokenStream) -> TokenStream {
         let items = rule
             .iter()
             .map(|symbol| match symbol {
-                BNFSymbol::Terminal { name, .. } => Symbol::Terminal(
-                    *token_name_map
-                        .get(&name.to_string())
-                        .expect("token name is not found"),
-                ),
-                BNFSymbol::NonTerminal { name, .. } => Symbol::NonTerminal(
-                    *symbol_name_map
-                        .get(&name.to_string())
-                        .expect("symbol name is not found"),
-                ),
+                BNFSymbol::Terminal { name, .. } => Symbol::Terminal(*token_name_map.get(&name.to_string()).expect("token name is not found")),
+                BNFSymbol::NonTerminal { name, .. } => Symbol::NonTerminal(*symbol_name_map.get(&name.to_string()).expect("symbol name is not found")),
+                BNFSymbol::Error(_) => Symbol::Error(()),
             })
             .collect::<Vec<_>>();
         syntax = syntax.rule(Rule::new_raw(start, &items, |_| unreachable!()));
     }
-    let syntax = syntax.build(AnonymousSymbol(
-        *symbol_name_map
-            .get(&start.to_string())
-            .expect("symbol name is not found"),
-    ));
-    let (
-        LR1Parser {
-            action_table,
-            goto_table,
-            error_rules,
-            start,
-            ..
-        },
-        warnings,
-    ) = LR1Parser::new(syntax);
+    let syntax = syntax.build(AnonymousSymbol(*symbol_name_map.get(&start.to_string()).expect("symbol name is not found")));
+    eprintln!("start construct parser.");
+    let stopwatch = Instant::now();
+    let (LR1Parser { action_table, goto_table, error_rules, start, .. }, warnings) = LR1Parser::new(syntax);
+    eprintln!("construct parser finished in {}ms.", stopwatch.elapsed().as_millis());
     if !warnings.is_empty() {
         eprintln!("warnings in construct parser {:?}", warnings);
     }
@@ -274,7 +223,7 @@ pub fn parser(input: TokenStream) -> TokenStream {
                     TerminalSymbol::Symbol(s) => {
                         quote! { parser::TerminalSymbol::Symbol(tokens[#s]) }
                     }
-                    TerminalSymbol::Error => quote! { parser::TerminalSymbol::Error },
+                    TerminalSymbol::Error(_) => quote! { parser::TerminalSymbol::Error(()) },
                     TerminalSymbol::EOI => quote! { parser::TerminalSymbol::EOI },
                 };
                 let value = match value {
@@ -287,7 +236,7 @@ pub fn parser(input: TokenStream) -> TokenStream {
 
             quote! {
                 let value = {
-                    let mut value = std::collections::HashMap::with_capacity(#value_size);
+                    let mut value: std::collections::HashMap<parser::TerminalSymbol<usize, ()>, parser::Action<usize, usize>> = std::collections::HashMap::<parser::TerminalSymbol<usize, ()>, parser::Action<usize, usize>>::with_capacity(#value_size);
                     #(#value_constructor)*
                     value
                 };
@@ -296,7 +245,7 @@ pub fn parser(input: TokenStream) -> TokenStream {
         });
         quote! {
             {
-                let mut action_table = std::collections::HashMap::with_capacity(#action_table_size);
+                let mut action_table: std::collections::HashMap<usize, std::collections::HashMap<parser::TerminalSymbol<usize, ()>, parser::Action<usize, usize>>> = std::collections::HashMap::<usize, std::collections::HashMap<parser::TerminalSymbol<usize, ()>, parser::Action<usize, usize>>>::with_capacity(#action_table_size);
                 #(#action_table_constructor)*
                 action_table
             }
@@ -306,12 +255,10 @@ pub fn parser(input: TokenStream) -> TokenStream {
         let goto_table_size = goto_table.len();
         let goto_table_constructor = goto_table.into_iter().map(|(key, value)| {
             let value_size = value.len();
-            let value_constructor = value
-                .into_iter()
-                .map(|(key, value)| quote! {value.insert(symbols[#key], #value);});
+            let value_constructor = value.into_iter().map(|(key, value)| quote! {value.insert(symbols[#key], #value);});
             quote! {
                 let value = {
-                    let mut value = std::collections::HashMap::with_capacity(#value_size);
+                    let mut value: std::collections::HashMap<usize, usize> = std::collections::HashMap::<usize, usize>::with_capacity(#value_size);
                     #(#value_constructor)*
                     value
                 };
@@ -320,7 +267,7 @@ pub fn parser(input: TokenStream) -> TokenStream {
         });
         quote! {
             {
-                let mut goto_table = std::collections::HashMap::with_capacity(#goto_table_size);
+                let mut goto_table: std::collections::HashMap<usize, std::collections::HashMap<usize, usize>> = std::collections::HashMap::<usize, std::collections::HashMap<usize, usize>>::with_capacity(#goto_table_size);
                 #(#goto_table_constructor)*
                 goto_table
             }
@@ -333,7 +280,7 @@ pub fn parser(input: TokenStream) -> TokenStream {
             let value_constructor = value.into_iter().map(|v| quote! { value.insert(#v); });
             quote! {
                 let value = {
-                    let value = std::collections::HashSet::with_capacity(#value_size);
+                    let mut value: std::collections::HashSet<usize> = std::collections::HashSet::<usize>::with_capacity(#value_size);
                     #(#value_constructor)*
                     value
                 };
@@ -342,7 +289,7 @@ pub fn parser(input: TokenStream) -> TokenStream {
         });
         quote! {
             {
-                let mut error_rules = std::collections::HashMap::with_capacity(#error_rules_size);
+                let mut error_rules: std::collections::HashMap<usize, std::collections::HashSet<usize>> = std::collections::HashMap::<usize, std::collections::HashSet<usize>>::with_capacity(#error_rules_size);
                 #(#error_rules_constructor)*
                 error_rules
             }
@@ -354,25 +301,26 @@ pub fn parser(input: TokenStream) -> TokenStream {
         let items = rule.rule.iter().map(|item| match item {
             BNFSymbol::Terminal { name, .. } => {
                 let token = *token_name_map.get(&name.to_string()).expect("");
-                quote! { parser::Symbol::Terminal(tokens[#token]) }
+                quote! { parser::Symbol::<usize, usize, ()>::Terminal(tokens[#token]) }
             }
             BNFSymbol::NonTerminal { name, .. } => {
                 let symbol = *symbol_name_map.get(&name.to_string()).expect("");
-                quote! { parser::Symbol::NonTerminal(symbols[#symbol]) }
+                quote! { parser::Symbol::<usize, usize, ()>::NonTerminal(symbols[#symbol]) }
             }
+            BNFSymbol::Error(_) => quote! { parser::Symbol::<usize, usize, ()>::Error(()) },
         });
-        quote! { parser::Rule::<#symbol_type_name, #token_type_name>::new_raw(symbols[#start], &[#(#items),*], #generator) }
+        quote! { parser::Rule::<#symbol_type_name, #token_type_name, #error>::new_raw(symbols[#start], &[#(#items),*], #generator) }
     });
     let tokens = tokens.items.iter(); //.map(|token| dbg!(quote! { #token_type_name::#token }));
     let symbols = symbols.items.iter(); //.map(|symbol|quote!{ #symbol_type_name::#symbol });
     let result = quote! {
-        pub fn get_parser() -> parser::LR1Parser<#symbol_type_name, #token_type_name>{
+        pub fn get_parser() -> parser::LR1Parser<#symbol_type_name, #token_type_name, #error>{
             let tokens = [#(parser::enum_index::EnumIndex::enum_index(&(#token_type_name::#tokens))),*];
             let symbols = [#(parser::enum_index::EnumIndex::enum_index(&(#symbol_type_name::#symbols))),*];
-            let action_table = #action_table_constructor;
-            let goto_table = #goto_table_constructor;
-            let error_rules = #error_rules_constructor;
-            let rules = parser::Syntax::builder()
+            let action_table: std::collections::HashMap<usize, std::collections::HashMap<parser::TerminalSymbol<usize, ()>, parser::Action<usize, usize>>> = #action_table_constructor;
+            let goto_table: std::collections::HashMap<usize, std::collections::HashMap<usize, usize>> = #goto_table_constructor;
+            let error_rules: std::collections::HashMap<usize, std::collections::HashSet<usize>> = #error_rules_constructor;
+            let rules = parser::Syntax::<#symbol_type_name, #token_type_name, #error>::builder()
                 #(.rule(#rules_constructor))*
                 .build_raw(#start)
                 .into_rules();

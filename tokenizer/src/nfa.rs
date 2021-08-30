@@ -21,7 +21,6 @@ use regex_syntax::hir::{Class, Hir, HirKind, Literal, RepetitionKind, Repetition
 
 use crate::CharRange;
 
-
 #[derive(Debug, Clone)]
 pub(crate) struct TokenizerNFANodeRef<'a>(*const TokenizerNFANode<'a>, PhantomData<&'a ()>);
 
@@ -85,7 +84,9 @@ impl<'a> TokenizerNFANode<'a> {
         let mut q = VecDeque::new();
         q.push_back(self.reference());
         while let Some(node) = q.pop_front() {
-            if set.contains(&node) { continue; }
+            if set.contains(&node) {
+                continue;
+            }
             for node in &node.epsilon {
                 q.push_back(node.reference());
             }
@@ -168,11 +169,7 @@ impl<'a> TryFrom<Vec<Hir>> for TokenizerNFA<'a> {
         }
         let begin_ref = begin.reference();
         node.push(begin);
-        Ok(Self {
-            node,
-            begin: begin_ref,
-            end,
-        })
+        Ok(Self { node, begin: begin_ref, end })
     }
 }
 
@@ -213,39 +210,17 @@ struct NFA {
 
 impl Clone for NFA {
     fn clone(&self) -> Self {
-        let map: HashMap<_, _> = self.node.iter()
-            .zip(0..)
-            .map(|(arc, index)| (Arc::as_ptr(arc), index))
-            .collect();
-        let node: Vec<_> = self.node.iter()
-            .map(|_| Arc::new(RwLock::new(NFANode { epsilon: HashSet::new(), next: BTreeMap::new() })))
-            .collect();
-        node.iter()
-            .zip(self.node.iter())
-            .for_each(|(new, old)| {
-                let mut new = new.write().unwrap();
-                let old = old.read().unwrap();
-                new.epsilon = old.epsilon.iter()
-                    .map(|weak| Edge(Arc::downgrade(&node[map[&weak.0.as_ptr()]])))
-                    .collect();
-                new.next = old.next.iter()
-                    .map(|(k, v)|
-                        (
-                            k.clone(),
-                            v.iter()
-                                .map(|weak| Edge(Arc::downgrade(&node[map[&weak.0.as_ptr()]])))
-                                .collect()
-                        )
-                    )
-                    .collect();
-            });
+        let map: HashMap<_, _> = self.node.iter().zip(0..).map(|(arc, index)| (Arc::as_ptr(arc), index)).collect();
+        let node: Vec<_> = self.node.iter().map(|_| Arc::new(RwLock::new(NFANode { epsilon: HashSet::new(), next: BTreeMap::new() }))).collect();
+        node.iter().zip(self.node.iter()).for_each(|(new, old)| {
+            let mut new = new.write().unwrap();
+            let old = old.read().unwrap();
+            new.epsilon = old.epsilon.iter().map(|weak| Edge(Arc::downgrade(&node[map[&weak.0.as_ptr()]]))).collect();
+            new.next = old.next.iter().map(|(k, v)| (k.clone(), v.iter().map(|weak| Edge(Arc::downgrade(&node[map[&weak.0.as_ptr()]]))).collect())).collect();
+        });
         let begin = Arc::clone(&node[map[&Arc::as_ptr(&self.begin)]]);
         let end = Arc::clone(&node[map[&Arc::as_ptr(&self.end)]]);
-        NFA {
-            node,
-            begin,
-            end,
-        }
+        NFA { node, begin, end }
     }
 }
 
@@ -277,22 +252,14 @@ impl TryFrom<HirKind> for NFA {
                 guard.epsilon.insert(weak.clone());
                 guard.next.insert(CharRange { range: '\u{0}' as u32..'\u{10ffff}' as u32 + 1 }, HashSet::from_iter(vec![weak]));
                 drop(guard);
-                Ok(NFA {
-                    node: vec![Arc::clone(&node)],
-                    begin: Arc::clone(&node),
-                    end: node,
-                })
+                Ok(NFA { node: vec![Arc::clone(&node)], begin: Arc::clone(&node), end: node })
             }
             HirKind::Literal(literal) => {
                 if let Literal::Unicode(u) = literal {
                     let begin: Arc<RwLock<NFANode>> = Arc::new(Default::default());
                     let end: Arc<RwLock<NFANode>> = Arc::new(Default::default());
                     begin.write().unwrap().next.insert(CharRange { range: u as u32..u as u32 + 1 }, HashSet::from_iter(vec![Edge(Arc::downgrade(&end))]));
-                    Ok(NFA {
-                        node: vec![Arc::clone(&begin), Arc::clone(&end)],
-                        begin,
-                        end,
-                    })
+                    Ok(NFA { node: vec![Arc::clone(&begin), Arc::clone(&end)], begin, end })
                 } else {
                     Err(NFAConstructError::ByteLiteralIsNotSupported)
                 }
@@ -306,17 +273,13 @@ impl TryFrom<HirKind> for NFA {
                         guard.next.insert(CharRange { range: range.start() as u32..range.end() as u32 + 1 }, HashSet::from_iter(vec![Edge(Arc::downgrade(&end))]));
                     }
                     drop(guard);
-                    Ok(NFA {
-                        node: vec![Arc::clone(&begin), Arc::clone(&end)],
-                        begin,
-                        end,
-                    })
+                    Ok(NFA { node: vec![Arc::clone(&begin), Arc::clone(&end)], begin, end })
                 } else {
                     Err(NFAConstructError::BytesClassIsNotSupported)
                 }
             }
-            HirKind::Anchor(_) => { Err(NFAConstructError::AnchorIsNotSupported) }
-            HirKind::WordBoundary(_) => { Err(NFAConstructError::WordBoundaryIsNotSupported) }
+            HirKind::Anchor(_) => Err(NFAConstructError::AnchorIsNotSupported),
+            HirKind::WordBoundary(_) => Err(NFAConstructError::WordBoundaryIsNotSupported),
             HirKind::Repetition(repetition) => {
                 let mut inner = NFA::try_from(repetition.hir.into_kind())?;
                 match repetition.kind {
@@ -333,145 +296,123 @@ impl TryFrom<HirKind> for NFA {
                         inner.end.write().unwrap().epsilon.insert(Edge(Arc::downgrade(&inner.begin)));
                         Ok(inner)
                     }
-                    RepetitionKind::Range(range) => {
-                        match range {
-                            RepetitionRange::Exactly(n) => {
-                                match n {
-                                    0 => {
-                                        let node = Arc::new(Default::default());
-                                        Ok(NFA {
-                                            node: vec![Arc::clone(&node)],
-                                            begin: Arc::clone(&node),
-                                            end: node,
-                                        })
-                                    }
-                                    1 => {
-                                        Ok(inner)
-                                    }
-                                    n => {
-                                        let NFA { mut node, begin, mut end } = inner.clone();
-                                        for _ in 0..n - 2 {
-                                            let mut nfa = inner.clone();
-                                            node.append(&mut nfa.node);
-                                            end.write().unwrap().epsilon.insert(Edge(Arc::downgrade(&nfa.begin)));
-                                            end = nfa.end;
-                                        }
-                                        node.append(&mut inner.node);
-                                        end.write().unwrap().epsilon.insert(Edge(Arc::downgrade(&inner.begin)));
-                                        end = inner.end;
-                                        Ok(NFA { node, begin, end })
-                                    }
-                                }
+                    RepetitionKind::Range(range) => match range {
+                        RepetitionRange::Exactly(n) => match n {
+                            0 => {
+                                let node = Arc::new(Default::default());
+                                Ok(NFA { node: vec![Arc::clone(&node)], begin: Arc::clone(&node), end: node })
                             }
-                            RepetitionRange::AtLeast(n) => {
-                                match n {
-                                    0 => {
-                                        inner.end.write().unwrap().epsilon.insert(Edge(Arc::downgrade(&inner.begin)));
-                                        inner.end = Arc::clone(&inner.begin);
-                                        Ok(inner)
-                                    }
-                                    n => {
-                                        let NFA { mut node, begin, mut end } = inner.clone();
-                                        for _ in 0..n - 1 {
-                                            let mut nfa = inner.clone();
-                                            node.append(&mut nfa.node);
-                                            end.write().unwrap().epsilon.insert(Edge(Arc::downgrade(&nfa.begin)));
-                                            end = nfa.end;
-                                        }
-                                        end.write().unwrap().epsilon.insert(Edge(Arc::downgrade(&inner.begin)));
-                                        inner.end.write().unwrap().epsilon.insert(Edge(Arc::downgrade(&inner.begin)));
-                                        inner.end = Arc::clone(&inner.begin);
-                                        node.append(&mut inner.node);
-                                        end = inner.end;
-                                        Ok(NFA { node, begin, end })
-                                    }
+                            1 => Ok(inner),
+                            n => {
+                                let NFA { mut node, begin, mut end } = inner.clone();
+                                for _ in 0..n - 2 {
+                                    let mut nfa = inner.clone();
+                                    node.append(&mut nfa.node);
+                                    end.write().unwrap().epsilon.insert(Edge(Arc::downgrade(&nfa.begin)));
+                                    end = nfa.end;
                                 }
+                                node.append(&mut inner.node);
+                                end.write().unwrap().epsilon.insert(Edge(Arc::downgrade(&inner.begin)));
+                                end = inner.end;
+                                Ok(NFA { node, begin, end })
                             }
-                            RepetitionRange::Bounded(n, m) => {
-                                match (n, m) {
-                                    (0, 0) => {
-                                        let node = Arc::new(Default::default());
-                                        Ok(NFA {
-                                            node: vec![Arc::clone(&node)],
-                                            begin: Arc::clone(&node),
-                                            end: node,
-                                        })
-                                    }
-                                    (0, 1) => {
-                                        inner.begin.write().unwrap().epsilon.insert(Edge(Arc::downgrade(&inner.end)));
-                                        Ok(inner)
-                                    }
-                                    (0, n) => {
-                                        let NFA { mut node, begin, mut end } = inner.clone();
-                                        for _ in 0..n - 2 {
-                                            let mut nfa = inner.clone();
-                                            node.append(&mut nfa.node);
-                                            let mut guard = end.write().unwrap();
-                                            guard.epsilon.insert(Edge(Arc::downgrade(&nfa.begin)));
-                                            guard.epsilon.insert(Edge(Arc::downgrade(&inner.end)));
-                                            drop(guard);
-                                            end = nfa.end;
-                                        }
-                                        node.append(&mut inner.node);
-                                        let mut guard = end.write().unwrap();
-                                        guard.epsilon.insert(Edge(Arc::downgrade(&inner.begin)));
-                                        guard.epsilon.insert(Edge(Arc::downgrade(&inner.end)));
-                                        drop(guard);
-                                        end = inner.end;
-                                        begin.write().unwrap().epsilon.insert(Edge(Arc::downgrade(&end)));
-                                        Ok(NFA { node, begin, end })
-                                    }
-                                    (1, 1) => {
-                                        Ok(inner)
-                                    }
-                                    (n, m) if n == m => {
-                                        let NFA { mut node, begin, mut end } = inner.clone();
-                                        for _ in 0..n - 2 {
-                                            let mut nfa = inner.clone();
-                                            node.append(&mut nfa.node);
-                                            end.write().unwrap().epsilon.insert(Edge(Arc::downgrade(&nfa.begin)));
-                                            end = nfa.end;
-                                        }
-                                        node.append(&mut inner.node);
-                                        end.write().unwrap().epsilon.insert(Edge(Arc::downgrade(&inner.begin)));
-                                        end = inner.end;
-                                        Ok(NFA { node, begin, end })
-                                    }
-                                    (n, m) if n < m => {
-                                        let NFA { mut node, begin, mut end } = inner.clone();
-                                        for _ in 0..n - 1 {
-                                            let mut nfa = inner.clone();
-                                            node.append(&mut nfa.node);
-                                            end.write().unwrap().epsilon.insert(Edge(Arc::downgrade(&nfa.begin)));
-                                            end = nfa.end;
-                                        }
-                                        for _ in 0..m - n - 1 {
-                                            let mut nfa = inner.clone();
-                                            node.append(&mut nfa.node);
-                                            let mut guard = end.write().unwrap();
-                                            guard.epsilon.insert(Edge(Arc::downgrade(&nfa.begin)));
-                                            guard.epsilon.insert(Edge(Arc::downgrade(&inner.end)));
-                                            drop(guard);
-                                            end = nfa.end;
-                                        }
-                                        node.append(&mut inner.node);
-                                        let mut guard = end.write().unwrap();
-                                        guard.epsilon.insert(Edge(Arc::downgrade(&inner.begin)));
-                                        guard.epsilon.insert(Edge(Arc::downgrade(&inner.end)));
-                                        drop(guard);
-                                        end = inner.end;
-                                        Ok(NFA { node, begin, end })
-                                    }
-                                    _ => unreachable!()
+                        },
+                        RepetitionRange::AtLeast(n) => match n {
+                            0 => {
+                                inner.end.write().unwrap().epsilon.insert(Edge(Arc::downgrade(&inner.begin)));
+                                inner.end = Arc::clone(&inner.begin);
+                                Ok(inner)
+                            }
+                            n => {
+                                let NFA { mut node, begin, mut end } = inner.clone();
+                                for _ in 0..n - 1 {
+                                    let mut nfa = inner.clone();
+                                    node.append(&mut nfa.node);
+                                    end.write().unwrap().epsilon.insert(Edge(Arc::downgrade(&nfa.begin)));
+                                    end = nfa.end;
                                 }
+                                end.write().unwrap().epsilon.insert(Edge(Arc::downgrade(&inner.begin)));
+                                inner.end.write().unwrap().epsilon.insert(Edge(Arc::downgrade(&inner.begin)));
+                                inner.end = Arc::clone(&inner.begin);
+                                node.append(&mut inner.node);
+                                end = inner.end;
+                                Ok(NFA { node, begin, end })
                             }
-                        }
-                    }
+                        },
+                        RepetitionRange::Bounded(n, m) => match (n, m) {
+                            (0, 0) => {
+                                let node = Arc::new(Default::default());
+                                Ok(NFA { node: vec![Arc::clone(&node)], begin: Arc::clone(&node), end: node })
+                            }
+                            (0, 1) => {
+                                inner.begin.write().unwrap().epsilon.insert(Edge(Arc::downgrade(&inner.end)));
+                                Ok(inner)
+                            }
+                            (0, n) => {
+                                let NFA { mut node, begin, mut end } = inner.clone();
+                                for _ in 0..n - 2 {
+                                    let mut nfa = inner.clone();
+                                    node.append(&mut nfa.node);
+                                    let mut guard = end.write().unwrap();
+                                    guard.epsilon.insert(Edge(Arc::downgrade(&nfa.begin)));
+                                    guard.epsilon.insert(Edge(Arc::downgrade(&inner.end)));
+                                    drop(guard);
+                                    end = nfa.end;
+                                }
+                                node.append(&mut inner.node);
+                                let mut guard = end.write().unwrap();
+                                guard.epsilon.insert(Edge(Arc::downgrade(&inner.begin)));
+                                guard.epsilon.insert(Edge(Arc::downgrade(&inner.end)));
+                                drop(guard);
+                                end = inner.end;
+                                begin.write().unwrap().epsilon.insert(Edge(Arc::downgrade(&end)));
+                                Ok(NFA { node, begin, end })
+                            }
+                            (1, 1) => Ok(inner),
+                            (n, m) if n == m => {
+                                let NFA { mut node, begin, mut end } = inner.clone();
+                                for _ in 0..n - 2 {
+                                    let mut nfa = inner.clone();
+                                    node.append(&mut nfa.node);
+                                    end.write().unwrap().epsilon.insert(Edge(Arc::downgrade(&nfa.begin)));
+                                    end = nfa.end;
+                                }
+                                node.append(&mut inner.node);
+                                end.write().unwrap().epsilon.insert(Edge(Arc::downgrade(&inner.begin)));
+                                end = inner.end;
+                                Ok(NFA { node, begin, end })
+                            }
+                            (n, m) if n < m => {
+                                let NFA { mut node, begin, mut end } = inner.clone();
+                                for _ in 0..n - 1 {
+                                    let mut nfa = inner.clone();
+                                    node.append(&mut nfa.node);
+                                    end.write().unwrap().epsilon.insert(Edge(Arc::downgrade(&nfa.begin)));
+                                    end = nfa.end;
+                                }
+                                for _ in 0..m - n - 1 {
+                                    let mut nfa = inner.clone();
+                                    node.append(&mut nfa.node);
+                                    let mut guard = end.write().unwrap();
+                                    guard.epsilon.insert(Edge(Arc::downgrade(&nfa.begin)));
+                                    guard.epsilon.insert(Edge(Arc::downgrade(&inner.end)));
+                                    drop(guard);
+                                    end = nfa.end;
+                                }
+                                node.append(&mut inner.node);
+                                let mut guard = end.write().unwrap();
+                                guard.epsilon.insert(Edge(Arc::downgrade(&inner.begin)));
+                                guard.epsilon.insert(Edge(Arc::downgrade(&inner.end)));
+                                drop(guard);
+                                end = inner.end;
+                                Ok(NFA { node, begin, end })
+                            }
+                            _ => unreachable!(),
+                        },
+                    },
                 }
             }
-            HirKind::Group(group) => {
-                Self::try_from(group.hir.into_kind())
-            }
+            HirKind::Group(group) => Self::try_from(group.hir.into_kind()),
             HirKind::Concat(mut vec) => {
                 let NFA { mut node, mut begin, end } = Self::try_from(vec.pop().unwrap())?;
                 while let Some(hir) = vec.pop() {
@@ -505,29 +446,13 @@ impl TryFrom<HirKind> for NFA {
 #[cfg(test)]
 pub(crate) fn tokenizer_nfa_to_index(nfa: &TokenizerNFA) -> (Vec<(BTreeSet<usize>, BTreeSet<(CharRange, BTreeSet<usize>)>)>, usize, Vec<usize>) {
     let mut map = HashMap::new();
-    nfa.node.iter().zip(0usize..).for_each(|(edge, i)| { map.insert(edge.reference(), i); });
+    nfa.node.iter().zip(0usize..).for_each(|(edge, i)| {
+        map.insert(edge.reference(), i);
+    });
     (
-        nfa.node.iter()
-            .map(|node| {
-                (
-                    node.epsilon.iter()
-                        .map(|edge| map[&edge])
-                        .collect(),
-                    node.next.iter()
-                        .map(|(k, v)| {
-                            (
-                                k.clone(),
-                                v.iter()
-                                    .map(|edge| map[&edge])
-                                    .collect()
-                            )
-                        })
-                        .collect()
-                )
-            })
-            .collect(),
+        nfa.node.iter().map(|node| (node.epsilon.iter().map(|edge| map[&edge]).collect(), node.next.iter().map(|(k, v)| (k.clone(), v.iter().map(|edge| map[&edge]).collect())).collect())).collect(),
         map[&nfa.begin],
-        nfa.end.iter().map(|node_ref| map[node_ref]).collect()
+        nfa.end.iter().map(|node_ref| map[node_ref]).collect(),
     )
 }
 
@@ -539,8 +464,8 @@ mod tests {
 
     use regex_syntax::hir::{Class, ClassUnicode, ClassUnicodeRange, Hir, Literal, Repetition, RepetitionKind, RepetitionRange};
 
+    use crate::nfa::{tokenizer_nfa_to_index, TokenizerNFA, NFA};
     use crate::CharRange;
-    use crate::nfa::{NFA, tokenizer_nfa_to_index, TokenizerNFA};
 
     macro_rules! seq {
         ($($a:expr),*)=>{std::iter::FromIterator::from_iter(vec![$($a),*].into_iter())}
@@ -548,120 +473,255 @@ mod tests {
 
     #[test]
     fn construct_tokenizer_nfa() {
-        assert_eq!(tokenizer_nfa_to_index(&TokenizerNFA::try_from(vec![Hir::literal(Literal::Unicode('a')), Hir::literal(Literal::Unicode('c')), Hir::literal(Literal::Unicode('e'))]).unwrap()),
-                   (vec![(seq![], seq![(CharRange{range: 'a' as u32..'a' as u32 + 1},seq![1])]), (seq![], seq![]), (seq![], seq![(CharRange{range: 'c' as u32..'c' as u32 + 1},seq![3])]), (seq![], seq![]), (seq![], seq![(CharRange{range: 'e' as u32..'e' as u32 + 1},seq![5])]), (seq![], seq![]), (seq![0,2,4], seq![])], 6, vec![1, 3, 5]));
+        assert_eq!(
+            tokenizer_nfa_to_index(&TokenizerNFA::try_from(vec![Hir::literal(Literal::Unicode('a')), Hir::literal(Literal::Unicode('c')), Hir::literal(Literal::Unicode('e'))]).unwrap()),
+            (
+                vec![
+                    (seq![], seq![(CharRange { range: 'a' as u32..'a' as u32 + 1 }, seq![1])]),
+                    (seq![], seq![]),
+                    (seq![], seq![(CharRange { range: 'c' as u32..'c' as u32 + 1 }, seq![3])]),
+                    (seq![], seq![]),
+                    (seq![], seq![(CharRange { range: 'e' as u32..'e' as u32 + 1 }, seq![5])]),
+                    (seq![], seq![]),
+                    (seq![0, 2, 4], seq![])
+                ],
+                6,
+                vec![1, 3, 5]
+            )
+        );
     }
 
     #[test]
     fn construct_nfa() {
         fn to_index(nfa: &NFA) -> (Vec<(BTreeSet<usize>, BTreeSet<(CharRange, BTreeSet<usize>)>)>, usize, usize) {
             let mut map = HashMap::new();
-            nfa.node.iter().zip(0usize..).for_each(|(edge, i)| { map.insert(Arc::as_ptr(edge), i); });
+            nfa.node.iter().zip(0usize..).for_each(|(edge, i)| {
+                map.insert(Arc::as_ptr(edge), i);
+            });
             (
-                nfa.node.iter()
+                nfa.node
+                    .iter()
                     .map(|node| {
                         let guard = node.read().unwrap();
-                        (
-                            guard.epsilon.iter()
-                                .map(|edge| map[&edge.0.as_ptr()])
-                                .collect(),
-                            guard.next.iter()
-                                .map(|(k, v)| {
-                                    (
-                                        k.clone(),
-                                        v.iter()
-                                            .map(|edge| map[&edge.0.as_ptr()])
-                                            .collect()
-                                    )
-                                })
-                                .collect()
-                        )
+                        (guard.epsilon.iter().map(|edge| map[&edge.0.as_ptr()]).collect(), guard.next.iter().map(|(k, v)| (k.clone(), v.iter().map(|edge| map[&edge.0.as_ptr()]).collect())).collect())
                     })
                     .collect(),
                 map[&Arc::as_ptr(&nfa.begin)],
-                map[&Arc::as_ptr(&nfa.end)]
+                map[&Arc::as_ptr(&nfa.end)],
             )
         }
-        assert_eq!(to_index(&NFA::try_from(Hir::empty()).unwrap()), (vec![(seq![0], seq![(CharRange{range:'\u{0}' as u32..'\u{10ffff}' as u32 + 1},seq![0])])], 0, 0));
-        assert_eq!(to_index(&NFA::try_from(Hir::literal(Literal::Unicode('a'))).unwrap()), (vec![(seq![], seq![(CharRange{range: 'a' as u32..'a' as u32 + 1},seq![1])]), (seq![], seq![])], 0, 1));
-        assert_eq!(to_index(&NFA::try_from(Hir::class(Class::Unicode(ClassUnicode::new(vec![ClassUnicodeRange::new('a', 'c'), ClassUnicodeRange::new('0', '3')])))).unwrap()), (vec![(seq![], seq![(CharRange{range: 'a' as u32..'c' as u32 + 1},seq![1]), (CharRange{range: '0' as u32..'3' as u32 + 1},seq![1])]), (seq![], seq![])], 0, 1));
-        assert_eq!(to_index(&NFA::try_from(Hir::concat(vec![Hir::literal(Literal::Unicode('a')), Hir::literal(Literal::Unicode('b'))])).unwrap()), (vec![(seq![], seq![(CharRange{range: 'b' as u32..'b' as u32 + 1},seq![1])]), (seq![], seq![]), (seq![], seq![(CharRange{range: 'a' as u32..'a' as u32 + 1},seq![3])]), (seq![0], seq![])], 2, 1));
-        assert_eq!(to_index(&NFA::try_from(Hir::concat(vec![Hir::literal(Literal::Unicode('a')), Hir::literal(Literal::Unicode('b')), Hir::literal(Literal::Unicode('c'))])).unwrap()),
-                   (vec![(seq![], seq![(CharRange{range: 'c' as u32..'c' as u32 + 1},seq![1])]), (seq![], seq![]), (seq![], seq![(CharRange{range: 'b' as u32..'b' as u32 + 1},seq![3])]), (seq![0], seq![]), (seq![], seq![(CharRange{range: 'a' as u32..'a' as u32 + 1},seq![5])]), (seq![2], seq![])], 4, 1));
-        assert_eq!(to_index(&NFA::try_from(Hir::alternation(vec![Hir::literal(Literal::Unicode('a')), Hir::literal(Literal::Unicode('b'))])).unwrap()), (vec![(seq![2,4], seq![]), (seq![], seq![]), (seq![], seq![(CharRange{range: 'a' as u32..'a' as u32 + 1},seq![3])]), (seq![1], seq![]), (seq![], seq![(CharRange{range: 'b' as u32..'b' as u32 + 1},seq![5])]), (seq![1], seq![])], 0, 1));
-        assert_eq!(to_index(&NFA::try_from(Hir::alternation(vec![Hir::literal(Literal::Unicode('a')), Hir::literal(Literal::Unicode('b')), Hir::literal(Literal::Unicode('c'))])).unwrap()),
-                   (vec![(seq![2, 4, 6], seq![]), (seq![], seq![]), (seq![], seq![(CharRange{range: 'a' as u32..'a' as u32 + 1},seq![3])]), (seq![1], seq![]), (seq![], seq![(CharRange{range: 'b' as u32..'b' as u32 + 1},seq![5])]), (seq![1], seq![]), (seq![], seq![(CharRange{range: 'c' as u32..'c' as u32 + 1},seq![7])]), (seq![1], seq![])], 0, 1));
-        assert_eq!(to_index(&NFA::try_from(Hir::repetition(Repetition {
-            kind: RepetitionKind::ZeroOrOne,
-            greedy: false,
-            hir: Box::new(Hir::literal(Literal::Unicode('a'))),
-        })).unwrap()), (vec![(seq![1], seq![(CharRange{range: 'a' as u32..'a' as u32 + 1},seq![1])]), (seq![], seq![])], 0, 1));
-        assert_eq!(to_index(&NFA::try_from(Hir::repetition(Repetition {
-            kind: RepetitionKind::ZeroOrMore,
-            greedy: false,
-            hir: Box::new(Hir::literal(Literal::Unicode('a'))),
-        })).unwrap()), (vec![(seq![], seq![(CharRange{range: 'a' as u32..'a' as u32 + 1},seq![1])]), (seq![0], seq![])], 0, 0));
-        assert_eq!(to_index(&NFA::try_from(Hir::repetition(Repetition {
-            kind: RepetitionKind::OneOrMore,
-            greedy: false,
-            hir: Box::new(Hir::literal(Literal::Unicode('a'))),
-        })).unwrap()), (vec![(seq![], seq![(CharRange{range: 'a' as u32..'a' as u32 + 1},seq![1])]), (seq![0], seq![])], 0, 1));
-        assert_eq!(to_index(&NFA::try_from(Hir::repetition(Repetition {
-            kind: RepetitionKind::Range(RepetitionRange::Exactly(0)),
-            greedy: false,
-            hir: Box::new(Hir::literal(Literal::Unicode('a'))),
-        })).unwrap()), (vec![(seq![], seq![])], 0, 0));
-        assert_eq!(to_index(&NFA::try_from(Hir::repetition(Repetition {
-            kind: RepetitionKind::Range(RepetitionRange::Exactly(1)),
-            greedy: false,
-            hir: Box::new(Hir::literal(Literal::Unicode('a'))),
-        })).unwrap()), (vec![(seq![], seq![(CharRange{range: 'a' as u32..'a' as u32 + 1},seq![1])]), (seq![], seq![])], 0, 1));
-        assert_eq!(to_index(&NFA::try_from(Hir::repetition(Repetition {
-            kind: RepetitionKind::Range(RepetitionRange::Exactly(3)),
-            greedy: false,
-            hir: Box::new(Hir::literal(Literal::Unicode('a'))),
-        })).unwrap()), (vec![(seq![], seq![(CharRange{range: 'a' as u32..'a' as u32 + 1},seq![1])]), (seq![2], seq![]), (seq![], seq![(CharRange{range: 'a' as u32..'a' as u32 + 1},seq![3])]), (seq![4], seq![]), (seq![], seq![(CharRange{range: 'a' as u32..'a' as u32 + 1},seq![5])]), (seq![], seq![])], 0, 5));
+        assert_eq!(to_index(&NFA::try_from(Hir::empty()).unwrap()), (vec![(seq![0], seq![(CharRange { range: '\u{0}' as u32..'\u{10ffff}' as u32 + 1 }, seq![0])])], 0, 0));
+        assert_eq!(to_index(&NFA::try_from(Hir::literal(Literal::Unicode('a'))).unwrap()), (vec![(seq![], seq![(CharRange { range: 'a' as u32..'a' as u32 + 1 }, seq![1])]), (seq![], seq![])], 0, 1));
+        assert_eq!(
+            to_index(&NFA::try_from(Hir::class(Class::Unicode(ClassUnicode::new(vec![ClassUnicodeRange::new('a', 'c'), ClassUnicodeRange::new('0', '3')])))).unwrap()),
+            (vec![(seq![], seq![(CharRange { range: 'a' as u32..'c' as u32 + 1 }, seq![1]), (CharRange { range: '0' as u32..'3' as u32 + 1 }, seq![1])]), (seq![], seq![])], 0, 1)
+        );
+        assert_eq!(
+            to_index(&NFA::try_from(Hir::concat(vec![Hir::literal(Literal::Unicode('a')), Hir::literal(Literal::Unicode('b'))])).unwrap()),
+            (vec![(seq![], seq![(CharRange { range: 'b' as u32..'b' as u32 + 1 }, seq![1])]), (seq![], seq![]), (seq![], seq![(CharRange { range: 'a' as u32..'a' as u32 + 1 }, seq![3])]), (seq![0], seq![])], 2, 1)
+        );
+        assert_eq!(
+            to_index(&NFA::try_from(Hir::concat(vec![Hir::literal(Literal::Unicode('a')), Hir::literal(Literal::Unicode('b')), Hir::literal(Literal::Unicode('c'))])).unwrap()),
+            (
+                vec![
+                    (seq![], seq![(CharRange { range: 'c' as u32..'c' as u32 + 1 }, seq![1])]),
+                    (seq![], seq![]),
+                    (seq![], seq![(CharRange { range: 'b' as u32..'b' as u32 + 1 }, seq![3])]),
+                    (seq![0], seq![]),
+                    (seq![], seq![(CharRange { range: 'a' as u32..'a' as u32 + 1 }, seq![5])]),
+                    (seq![2], seq![])
+                ],
+                4,
+                1
+            )
+        );
+        assert_eq!(
+            to_index(&NFA::try_from(Hir::alternation(vec![Hir::literal(Literal::Unicode('a')), Hir::literal(Literal::Unicode('b'))])).unwrap()),
+            (vec![(seq![2, 4], seq![]), (seq![], seq![]), (seq![], seq![(CharRange { range: 'a' as u32..'a' as u32 + 1 }, seq![3])]), (seq![1], seq![]), (seq![], seq![(CharRange { range: 'b' as u32..'b' as u32 + 1 }, seq![5])]), (seq![1], seq![])], 0, 1)
+        );
+        assert_eq!(
+            to_index(&NFA::try_from(Hir::alternation(vec![Hir::literal(Literal::Unicode('a')), Hir::literal(Literal::Unicode('b')), Hir::literal(Literal::Unicode('c'))])).unwrap()),
+            (
+                vec![
+                    (seq![2, 4, 6], seq![]),
+                    (seq![], seq![]),
+                    (seq![], seq![(CharRange { range: 'a' as u32..'a' as u32 + 1 }, seq![3])]),
+                    (seq![1], seq![]),
+                    (seq![], seq![(CharRange { range: 'b' as u32..'b' as u32 + 1 }, seq![5])]),
+                    (seq![1], seq![]),
+                    (seq![], seq![(CharRange { range: 'c' as u32..'c' as u32 + 1 }, seq![7])]),
+                    (seq![1], seq![])
+                ],
+                0,
+                1
+            )
+        );
+        assert_eq!(
+            to_index(
+                &NFA::try_from(Hir::repetition(Repetition {
+                    kind: RepetitionKind::ZeroOrOne,
+                    greedy: false,
+                    hir: Box::new(Hir::literal(Literal::Unicode('a'))),
+                }))
+                .unwrap()
+            ),
+            (vec![(seq![1], seq![(CharRange { range: 'a' as u32..'a' as u32 + 1 }, seq![1])]), (seq![], seq![])], 0, 1)
+        );
+        assert_eq!(
+            to_index(
+                &NFA::try_from(Hir::repetition(Repetition {
+                    kind: RepetitionKind::ZeroOrMore,
+                    greedy: false,
+                    hir: Box::new(Hir::literal(Literal::Unicode('a'))),
+                }))
+                .unwrap()
+            ),
+            (vec![(seq![], seq![(CharRange { range: 'a' as u32..'a' as u32 + 1 }, seq![1])]), (seq![0], seq![])], 0, 0)
+        );
+        assert_eq!(
+            to_index(
+                &NFA::try_from(Hir::repetition(Repetition {
+                    kind: RepetitionKind::OneOrMore,
+                    greedy: false,
+                    hir: Box::new(Hir::literal(Literal::Unicode('a'))),
+                }))
+                .unwrap()
+            ),
+            (vec![(seq![], seq![(CharRange { range: 'a' as u32..'a' as u32 + 1 }, seq![1])]), (seq![0], seq![])], 0, 1)
+        );
+        assert_eq!(
+            to_index(
+                &NFA::try_from(Hir::repetition(Repetition {
+                    kind: RepetitionKind::Range(RepetitionRange::Exactly(0)),
+                    greedy: false,
+                    hir: Box::new(Hir::literal(Literal::Unicode('a'))),
+                }))
+                .unwrap()
+            ),
+            (vec![(seq![], seq![])], 0, 0)
+        );
+        assert_eq!(
+            to_index(
+                &NFA::try_from(Hir::repetition(Repetition {
+                    kind: RepetitionKind::Range(RepetitionRange::Exactly(1)),
+                    greedy: false,
+                    hir: Box::new(Hir::literal(Literal::Unicode('a'))),
+                }))
+                .unwrap()
+            ),
+            (vec![(seq![], seq![(CharRange { range: 'a' as u32..'a' as u32 + 1 }, seq![1])]), (seq![], seq![])], 0, 1)
+        );
+        assert_eq!(
+            to_index(
+                &NFA::try_from(Hir::repetition(Repetition {
+                    kind: RepetitionKind::Range(RepetitionRange::Exactly(3)),
+                    greedy: false,
+                    hir: Box::new(Hir::literal(Literal::Unicode('a'))),
+                }))
+                .unwrap()
+            ),
+            (
+                vec![
+                    (seq![], seq![(CharRange { range: 'a' as u32..'a' as u32 + 1 }, seq![1])]),
+                    (seq![2], seq![]),
+                    (seq![], seq![(CharRange { range: 'a' as u32..'a' as u32 + 1 }, seq![3])]),
+                    (seq![4], seq![]),
+                    (seq![], seq![(CharRange { range: 'a' as u32..'a' as u32 + 1 }, seq![5])]),
+                    (seq![], seq![])
+                ],
+                0,
+                5
+            )
+        );
 
-        assert_eq!(to_index(&NFA::try_from(Hir::repetition(Repetition {
-            kind: RepetitionKind::Range(RepetitionRange::AtLeast(0)),
-            greedy: false,
-            hir: Box::new(Hir::literal(Literal::Unicode('a'))),
-        })).unwrap()), (vec![(seq![], seq![(CharRange{range: 'a' as u32..'a' as u32 + 1},seq![1])]), (seq![0], seq![])], 0, 0));
-        assert_eq!(to_index(&NFA::try_from(Hir::repetition(Repetition {
-            kind: RepetitionKind::Range(RepetitionRange::AtLeast(1)),
-            greedy: false,
-            hir: Box::new(Hir::literal(Literal::Unicode('a'))),
-        })).unwrap()), (vec![(seq![], seq![(CharRange{range: 'a' as u32..'a' as u32 + 1},seq![1])]), (seq![2], seq![]), (seq![], seq![(CharRange{range: 'a' as u32..'a' as u32 + 1},seq![3])]), (seq![2], seq![])], 0, 2));
+        assert_eq!(
+            to_index(
+                &NFA::try_from(Hir::repetition(Repetition {
+                    kind: RepetitionKind::Range(RepetitionRange::AtLeast(0)),
+                    greedy: false,
+                    hir: Box::new(Hir::literal(Literal::Unicode('a'))),
+                }))
+                .unwrap()
+            ),
+            (vec![(seq![], seq![(CharRange { range: 'a' as u32..'a' as u32 + 1 }, seq![1])]), (seq![0], seq![])], 0, 0)
+        );
+        assert_eq!(
+            to_index(
+                &NFA::try_from(Hir::repetition(Repetition {
+                    kind: RepetitionKind::Range(RepetitionRange::AtLeast(1)),
+                    greedy: false,
+                    hir: Box::new(Hir::literal(Literal::Unicode('a'))),
+                }))
+                .unwrap()
+            ),
+            (vec![(seq![], seq![(CharRange { range: 'a' as u32..'a' as u32 + 1 }, seq![1])]), (seq![2], seq![]), (seq![], seq![(CharRange { range: 'a' as u32..'a' as u32 + 1 }, seq![3])]), (seq![2], seq![])], 0, 2)
+        );
 
-        assert_eq!(to_index(&NFA::try_from(Hir::repetition(Repetition {
-            kind: RepetitionKind::Range(RepetitionRange::Bounded(0, 0)),
-            greedy: false,
-            hir: Box::new(Hir::literal(Literal::Unicode('a'))),
-        })).unwrap()), (vec![(seq![], seq![])], 0, 0));
-        assert_eq!(to_index(&NFA::try_from(Hir::repetition(Repetition {
-            kind: RepetitionKind::Range(RepetitionRange::Bounded(0, 1)),
-            greedy: false,
-            hir: Box::new(Hir::literal(Literal::Unicode('a'))),
-        })).unwrap()), (vec![(seq![1], seq![(CharRange{range: 'a' as u32..'a' as u32 + 1},seq![1])]), (seq![], seq![])], 0, 1));
-        assert_eq!(to_index(&NFA::try_from(Hir::repetition(Repetition {
-            kind: RepetitionKind::Range(RepetitionRange::Bounded(0, 2)),
-            greedy: false,
-            hir: Box::new(Hir::literal(Literal::Unicode('a'))),
-        })).unwrap()), (vec![(seq![3], seq![(CharRange{range: 'a' as u32..'a' as u32 + 1},seq![1])]), (seq![2,3], seq![]), (seq![], seq![(CharRange{range: 'a' as u32..'a' as u32 + 1},seq![3])]), (seq![], seq![])], 0, 3));
-        assert_eq!(to_index(&NFA::try_from(Hir::repetition(Repetition {
-            kind: RepetitionKind::Range(RepetitionRange::Bounded(1, 1)),
-            greedy: false,
-            hir: Box::new(Hir::literal(Literal::Unicode('a'))),
-        })).unwrap()), (vec![(seq![], seq![(CharRange{range: 'a' as u32..'a' as u32 + 1},seq![1])]), (seq![], seq![])], 0, 1));
-        assert_eq!(to_index(&NFA::try_from(Hir::repetition(Repetition {
-            kind: RepetitionKind::Range(RepetitionRange::Bounded(2, 2)),
-            greedy: false,
-            hir: Box::new(Hir::literal(Literal::Unicode('a'))),
-        })).unwrap()), (vec![(seq![], seq![(CharRange{range: 'a' as u32..'a' as u32 + 1},seq![1])]), (seq![2], seq![]), (seq![], seq![(CharRange{range: 'a' as u32..'a' as u32 + 1},seq![3])]), (seq![], seq![])], 0, 3));
-        assert_eq!(to_index(&NFA::try_from(Hir::repetition(Repetition {
-            kind: RepetitionKind::Range(RepetitionRange::Bounded(1, 2)),
-            greedy: false,
-            hir: Box::new(Hir::literal(Literal::Unicode('a'))),
-        })).unwrap()), (vec![(seq![], seq![(CharRange{range: 'a' as u32..'a' as u32 + 1},seq![1])]), (seq![2,3], seq![]), (seq![], seq![(CharRange{range: 'a' as u32..'a' as u32 + 1},seq![3])]), (seq![], seq![])], 0, 3));
+        assert_eq!(
+            to_index(
+                &NFA::try_from(Hir::repetition(Repetition {
+                    kind: RepetitionKind::Range(RepetitionRange::Bounded(0, 0)),
+                    greedy: false,
+                    hir: Box::new(Hir::literal(Literal::Unicode('a'))),
+                }))
+                .unwrap()
+            ),
+            (vec![(seq![], seq![])], 0, 0)
+        );
+        assert_eq!(
+            to_index(
+                &NFA::try_from(Hir::repetition(Repetition {
+                    kind: RepetitionKind::Range(RepetitionRange::Bounded(0, 1)),
+                    greedy: false,
+                    hir: Box::new(Hir::literal(Literal::Unicode('a'))),
+                }))
+                .unwrap()
+            ),
+            (vec![(seq![1], seq![(CharRange { range: 'a' as u32..'a' as u32 + 1 }, seq![1])]), (seq![], seq![])], 0, 1)
+        );
+        assert_eq!(
+            to_index(
+                &NFA::try_from(Hir::repetition(Repetition {
+                    kind: RepetitionKind::Range(RepetitionRange::Bounded(0, 2)),
+                    greedy: false,
+                    hir: Box::new(Hir::literal(Literal::Unicode('a'))),
+                }))
+                .unwrap()
+            ),
+            (vec![(seq![3], seq![(CharRange { range: 'a' as u32..'a' as u32 + 1 }, seq![1])]), (seq![2, 3], seq![]), (seq![], seq![(CharRange { range: 'a' as u32..'a' as u32 + 1 }, seq![3])]), (seq![], seq![])], 0, 3)
+        );
+        assert_eq!(
+            to_index(
+                &NFA::try_from(Hir::repetition(Repetition {
+                    kind: RepetitionKind::Range(RepetitionRange::Bounded(1, 1)),
+                    greedy: false,
+                    hir: Box::new(Hir::literal(Literal::Unicode('a'))),
+                }))
+                .unwrap()
+            ),
+            (vec![(seq![], seq![(CharRange { range: 'a' as u32..'a' as u32 + 1 }, seq![1])]), (seq![], seq![])], 0, 1)
+        );
+        assert_eq!(
+            to_index(
+                &NFA::try_from(Hir::repetition(Repetition {
+                    kind: RepetitionKind::Range(RepetitionRange::Bounded(2, 2)),
+                    greedy: false,
+                    hir: Box::new(Hir::literal(Literal::Unicode('a'))),
+                }))
+                .unwrap()
+            ),
+            (vec![(seq![], seq![(CharRange { range: 'a' as u32..'a' as u32 + 1 }, seq![1])]), (seq![2], seq![]), (seq![], seq![(CharRange { range: 'a' as u32..'a' as u32 + 1 }, seq![3])]), (seq![], seq![])], 0, 3)
+        );
+        assert_eq!(
+            to_index(
+                &NFA::try_from(Hir::repetition(Repetition {
+                    kind: RepetitionKind::Range(RepetitionRange::Bounded(1, 2)),
+                    greedy: false,
+                    hir: Box::new(Hir::literal(Literal::Unicode('a'))),
+                }))
+                .unwrap()
+            ),
+            (vec![(seq![], seq![(CharRange { range: 'a' as u32..'a' as u32 + 1 }, seq![1])]), (seq![2, 3], seq![]), (seq![], seq![(CharRange { range: 'a' as u32..'a' as u32 + 1 }, seq![3])]), (seq![], seq![])], 0, 3)
+        );
     }
 }

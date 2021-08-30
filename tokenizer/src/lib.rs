@@ -4,11 +4,11 @@ use std::convert::TryFrom;
 use std::fmt::Debug;
 use std::ops::Range;
 
-pub use crate::tokenizer::DFATokenizer;
 pub use crate::tokenizer::iter::{Tokenize, TokenizeIterator};
+pub use crate::tokenizer::DFATokenizer;
 
-mod nfa;
 mod dfa;
+mod nfa;
 mod tokenizer;
 
 #[derive(Eq, Hash, Clone)]
@@ -19,7 +19,14 @@ struct CharRange {
 impl Debug for CharRange {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CharRange")
-            .field("range", &if self.range.end - self.range.start == 1 { char::try_from(self.range.start).unwrap_or('~').to_string() } else { format!("{}..={}", char::try_from(self.range.start).unwrap_or('~'), char::try_from(self.range.end - 1).unwrap_or('~')) })
+            .field(
+                "range",
+                &if self.range.end - self.range.start == 1 {
+                    char::try_from(self.range.start).unwrap_or('~').to_string()
+                } else {
+                    format!("{}..={}", char::try_from(self.range.start).unwrap_or('~'), char::try_from(self.range.end - 1).unwrap_or('~'))
+                },
+            )
             .finish()
     }
 }
@@ -47,7 +54,6 @@ impl Ord for CharRange {
         self.range.start.cmp(&other.range.start)
     }
 }
-
 
 #[cfg(test)]
 mod tests {

@@ -5,8 +5,8 @@ use std::mem::swap;
 use std::ops::Deref;
 use std::pin::Pin;
 
-use crate::CharRange;
 use crate::nfa::{TokenizerNFA, TokenizerNFANodeRef};
+use crate::CharRange;
 
 #[derive(Debug, Clone)]
 pub(crate) struct TokenizerDFANodeRef<'a>(*const TokenizerDFANode<'a>, PhantomData<&'a ()>);
@@ -66,7 +66,7 @@ pub(crate) struct TokenizerDFA<'a> {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum DFAConstructWarning {
-    EndConflict(usize, usize)
+    EndConflict(usize, usize),
 }
 
 impl<'a, 'b> From<TokenizerNFA<'a>> for (TokenizerDFA<'b>, Vec<DFAConstructWarning>) {
@@ -89,15 +89,13 @@ impl<'a, 'b> From<TokenizerNFA<'a>> for (TokenizerDFA<'b>, Vec<DFAConstructWarni
         let mut processed = HashSet::new();
 
         while let Some(current_node) = q.pop_front() {
-            if !processed.insert(node_ref[&current_node]) { continue; }
+            if !processed.insert(node_ref[&current_node]) {
+                continue;
+            }
             let mut next = BTreeMap::new();
             for node in &current_node {
                 for (char_range, next_node) in node.next() {
-                    next.entry(char_range.range.start)
-                        .or_insert_with(BTreeMap::new)
-                        .entry(char_range.range.end)
-                        .or_insert_with(BTreeSet::new)
-                        .append(&mut next_node.iter().map(|node| node.epsilon_recursive()).flatten().collect::<BTreeSet<_>>());
+                    next.entry(char_range.range.start).or_insert_with(BTreeMap::new).entry(char_range.range.end).or_insert_with(BTreeSet::new).append(&mut next_node.iter().map(|node| node.epsilon_recursive()).flatten().collect::<BTreeSet<_>>());
                 }
             }
 
@@ -119,10 +117,7 @@ impl<'a, 'b> From<TokenizerNFA<'a>> for (TokenizerDFA<'b>, Vec<DFAConstructWarni
             }
         }
         for (set, index) in node_ref {
-            for (nfa_node, i) in nfa.end()
-                .iter()
-                .zip(0..nfa.end().len())
-                .rev() {
+            for (nfa_node, i) in nfa.end().iter().zip(0..nfa.end().len()).rev() {
                 if set.contains(nfa_node) {
                     if let Some(old) = end.insert(node[index].reference(), i) {
                         warnings.push(DFAConstructWarning::EndConflict(old, i));
@@ -136,7 +131,9 @@ impl<'a, 'b> From<TokenizerNFA<'a>> for (TokenizerDFA<'b>, Vec<DFAConstructWarni
 
 impl<'a> TokenizerDFA<'a> {
     pub(crate) fn minify<'b>(self) -> TokenizerDFA<'b> {
-        let mut group_map = self.node.iter()
+        let mut group_map = self
+            .node
+            .iter()
             .map(|node| {
                 let node_ref = node.reference();
                 let group = self.end.get(&node_ref).map_or(0, |i| *i + 1);
@@ -153,9 +150,7 @@ impl<'a> TokenizerDFA<'a> {
                 for node in set {
                     let node_next = &(*node).next;
                     let compressed_next = Self::compress_next(&group_map, node_next);
-                    split_group.entry(compressed_next)
-                        .or_insert_with(HashSet::new)
-                        .insert(node.reference());
+                    split_group.entry(compressed_next).or_insert_with(HashSet::new).insert(node.reference());
                 }
                 updated |= split_group.len() > 1;
                 for (_, set) in split_group.into_iter() {
@@ -165,7 +160,9 @@ impl<'a> TokenizerDFA<'a> {
                     max_index += 1;
                 }
             }
-            if !updated { break; }
+            if !updated {
+                break;
+            }
             swap(&mut group_map, &mut new_group_map);
         }
         let group_set = Self::create_group_set(&new_group_map);
@@ -179,11 +176,7 @@ impl<'a> TokenizerDFA<'a> {
         }
         let begin = node[new_group_map[&self.begin]].reference();
         let end = self.end.iter().map(|(k, v)| (node[new_group_map[k]].reference(), *v)).collect();
-        TokenizerDFA {
-            node,
-            begin,
-            end,
-        }
+        TokenizerDFA { node, begin, end }
     }
 
     fn create_group_set<'b>(group_map: &HashMap<TokenizerDFANodeRef<'b>, usize>) -> Vec<HashSet<TokenizerDFANodeRef<'b>>> {
@@ -223,12 +216,12 @@ impl<'a> TokenizerDFA<'a> {
 
 impl<'a> TokenizerDFA<'a> {
     fn align_by_begin(next_begin_map: &mut Vec<(u32, BTreeMap<u32, BTreeSet<TokenizerNFANodeRef>>)>) {
-        if next_begin_map.is_empty() { return; }
+        if next_begin_map.is_empty() {
+            return;
+        }
         for i in 0..next_begin_map.len() - 1 {
             let upper = next_begin_map[i + 1].0;
-            let greater_keys = next_begin_map[i].1.range(upper + 1..)
-                .map(|(k, _)| *k)
-                .collect::<Vec<_>>();
+            let greater_keys = next_begin_map[i].1.range(upper + 1..).map(|(k, _)| *k).collect::<Vec<_>>();
             if !greater_keys.is_empty() {
                 let mut greater_end_map = BTreeMap::new();
                 let mut limit_next = BTreeSet::new();
@@ -237,13 +230,9 @@ impl<'a> TokenizerDFA<'a> {
                     greater_end_map.insert(key, greater_next.clone());
                     limit_next.append(&mut greater_next);
                 }
-                next_begin_map[i].1.entry(upper)
-                    .or_insert_with(BTreeSet::new)
-                    .append(&mut limit_next);
+                next_begin_map[i].1.entry(upper).or_insert_with(BTreeSet::new).append(&mut limit_next);
                 for (end, mut greater_next) in greater_end_map {
-                    next_begin_map[i + 1].1.entry(end)
-                        .or_insert_with(BTreeSet::new)
-                        .append(&mut greater_next);
+                    next_begin_map[i + 1].1.entry(end).or_insert_with(BTreeSet::new).append(&mut greater_next);
                 }
             }
         }
@@ -272,21 +261,10 @@ impl<'a> TokenizerDFA<'a> {
 #[cfg(test)]
 pub(crate) fn tokenizer_dfa_to_index(dfa: &TokenizerDFA) -> (Vec<BTreeMap<CharRange, usize>>, usize, BTreeMap<usize, usize>) {
     let mut map = HashMap::new();
-    for (edge, i) in dfa.node.iter().zip(0usize..)
-    {
+    for (edge, i) in dfa.node.iter().zip(0usize..) {
         map.insert(edge.reference(), i);
     }
-    (
-        dfa.node.iter()
-            .map(|node| {
-                node.next.iter()
-                    .map(|(k, v)| (k.clone(), map[&v]))
-                    .collect()
-            })
-            .collect(),
-        map[&dfa.begin],
-        dfa.end.iter().map(|(node_ref, i)| (map[node_ref], *i)).collect()
-    )
+    (dfa.node.iter().map(|node| node.next.iter().map(|(k, v)| (k.clone(), map[&v])).collect()).collect(), map[&dfa.begin], dfa.end.iter().map(|(node_ref, i)| (map[node_ref], *i)).collect())
 }
 
 #[cfg(test)]
@@ -313,22 +291,26 @@ mod tests {
     use std::convert::TryFrom;
     use std::iter::FromIterator;
 
-    use rand::Rng;
     use rand::rngs::ThreadRng;
+    use rand::Rng;
     use regex_syntax::hir::{Class, ClassUnicode, ClassUnicodeRange, Hir, Literal, Repetition, RepetitionKind, RepetitionRange};
 
-    use crate::CharRange;
-    use crate::dfa::{DFAConstructWarning, tokenizer_dfa_to_index, TokenizerDFA};
+    use crate::dfa::{tokenizer_dfa_to_index, DFAConstructWarning, TokenizerDFA};
     use crate::nfa::TokenizerNFA;
+    use crate::CharRange;
 
     fn tokenizer_dfa_index_isomorphisms(a: &(Vec<BTreeMap<CharRange, usize>>, usize, BTreeMap<usize, usize>), b: &(Vec<BTreeMap<CharRange, usize>>, usize, BTreeMap<usize, usize>)) -> bool {
-        if a.0.len() != b.0.len() { return false; }
+        if a.0.len() != b.0.len() {
+            return false;
+        }
         let mut map = vec![None; a.0.len()];
         map[a.1] = Some(b.1);
         let mut q = VecDeque::new();
         q.push_back(a.1);
         while let Some(i) = q.pop_front() {
-            if a.0[i].len() != b.0[map[i].unwrap()].len() { return false; }
+            if a.0[i].len() != b.0[map[i].unwrap()].len() {
+                return false;
+            }
             for ((k1, v1), (k2, v2)) in a.0[i].iter().zip(b.0[map[i].unwrap()].iter()) {
                 if k1 != k2 {
                     return false;
@@ -343,7 +325,9 @@ mod tests {
         }
 
         for i in 0..a.0.len() {
-            if a.0[i].len() != b.0[map[i].unwrap()].len() { return false; }
+            if a.0[i].len() != b.0[map[i].unwrap()].len() {
+                return false;
+            }
             for ((k1, v1), (k2, v2)) in a.0[i].iter().zip(b.0[map[i].unwrap()].iter()) {
                 if k1 != k2 {
                     return false;
@@ -354,7 +338,9 @@ mod tests {
             }
         }
 
-        if a.2.len() != b.2.len() { return false; }
+        if a.2.len() != b.2.len() {
+            return false;
+        }
         for (k, v) in a.2.iter() {
             if b.2.get(&map[*k].unwrap()) != Some(v) {
                 return false;
@@ -368,96 +354,140 @@ mod tests {
     }
 
     macro_rules! range {
-        ($begin:expr) => {CharRange { range: $begin as u32..$begin as u32 + 1}};
-        ($begin:expr, $end:expr) => {CharRange { range: $begin as u32..$end as u32 + 1}};
+        ($begin:expr) => {
+            CharRange { range: $begin as u32..$begin as u32 + 1 }
+        };
+        ($begin:expr, $end:expr) => {
+            CharRange { range: $begin as u32..$end as u32 + 1 }
+        };
     }
 
     #[test]
     fn isomorphisms() {
         assert!(tokenizer_dfa_index_isomorphisms(
-            &(vec![
-                seq![(CharRange{ range: 0..10 }, 0), (CharRange{ range: 10..20 }, 1), (CharRange{ range: 20..30 }, 2), (CharRange{ range: 30..40 }, 3), (CharRange{ range: 40..50 }, 4)],
-                seq![(CharRange{ range: 1..11 }, 0), (CharRange{ range: 11..21 }, 1), (CharRange{ range: 21..31 }, 2), (CharRange{ range: 31..41 }, 3), (CharRange{ range: 41..51 }, 4)],
-                seq![(CharRange{ range: 2..12 }, 0), (CharRange{ range: 12..22 }, 1), (CharRange{ range: 22..32 }, 2), (CharRange{ range: 32..42 }, 3), (CharRange{ range: 42..52 }, 4)],
-                seq![(CharRange{ range: 3..13 }, 0), (CharRange{ range: 13..23 }, 1), (CharRange{ range: 23..33 }, 2), (CharRange{ range: 33..43 }, 3), (CharRange{ range: 43..53 }, 4)],
-                seq![(CharRange{ range: 4..14 }, 0), (CharRange{ range: 14..24 }, 1), (CharRange{ range: 24..34 }, 2), (CharRange{ range: 34..44 }, 3), (CharRange{ range: 44..54 }, 4)]], 0, seq![(2, 1), (3, 0), (4, 0)]),
-            &(vec![
-                seq![(CharRange{ range: 0..10 }, 0), (CharRange{ range: 10..20 }, 1), (CharRange{ range: 20..30 }, 2), (CharRange{ range: 30..40 }, 3), (CharRange{ range: 40..50 }, 4)],
-                seq![(CharRange{ range: 1..11 }, 0), (CharRange{ range: 11..21 }, 1), (CharRange{ range: 21..31 }, 2), (CharRange{ range: 31..41 }, 3), (CharRange{ range: 41..51 }, 4)],
-                seq![(CharRange{ range: 2..12 }, 0), (CharRange{ range: 12..22 }, 1), (CharRange{ range: 22..32 }, 2), (CharRange{ range: 32..42 }, 3), (CharRange{ range: 42..52 }, 4)],
-                seq![(CharRange{ range: 3..13 }, 0), (CharRange{ range: 13..23 }, 1), (CharRange{ range: 23..33 }, 2), (CharRange{ range: 33..43 }, 3), (CharRange{ range: 43..53 }, 4)],
-                seq![(CharRange{ range: 4..14 }, 0), (CharRange{ range: 14..24 }, 1), (CharRange{ range: 24..34 }, 2), (CharRange{ range: 34..44 }, 3), (CharRange{ range: 44..54 }, 4)]], 0, seq![(2, 1), (3, 0), (4, 0)]),
+            &(
+                vec![
+                    seq![(CharRange { range: 0..10 }, 0), (CharRange { range: 10..20 }, 1), (CharRange { range: 20..30 }, 2), (CharRange { range: 30..40 }, 3), (CharRange { range: 40..50 }, 4)],
+                    seq![(CharRange { range: 1..11 }, 0), (CharRange { range: 11..21 }, 1), (CharRange { range: 21..31 }, 2), (CharRange { range: 31..41 }, 3), (CharRange { range: 41..51 }, 4)],
+                    seq![(CharRange { range: 2..12 }, 0), (CharRange { range: 12..22 }, 1), (CharRange { range: 22..32 }, 2), (CharRange { range: 32..42 }, 3), (CharRange { range: 42..52 }, 4)],
+                    seq![(CharRange { range: 3..13 }, 0), (CharRange { range: 13..23 }, 1), (CharRange { range: 23..33 }, 2), (CharRange { range: 33..43 }, 3), (CharRange { range: 43..53 }, 4)],
+                    seq![(CharRange { range: 4..14 }, 0), (CharRange { range: 14..24 }, 1), (CharRange { range: 24..34 }, 2), (CharRange { range: 34..44 }, 3), (CharRange { range: 44..54 }, 4)]
+                ],
+                0,
+                seq![(2, 1), (3, 0), (4, 0)]
+            ),
+            &(
+                vec![
+                    seq![(CharRange { range: 0..10 }, 0), (CharRange { range: 10..20 }, 1), (CharRange { range: 20..30 }, 2), (CharRange { range: 30..40 }, 3), (CharRange { range: 40..50 }, 4)],
+                    seq![(CharRange { range: 1..11 }, 0), (CharRange { range: 11..21 }, 1), (CharRange { range: 21..31 }, 2), (CharRange { range: 31..41 }, 3), (CharRange { range: 41..51 }, 4)],
+                    seq![(CharRange { range: 2..12 }, 0), (CharRange { range: 12..22 }, 1), (CharRange { range: 22..32 }, 2), (CharRange { range: 32..42 }, 3), (CharRange { range: 42..52 }, 4)],
+                    seq![(CharRange { range: 3..13 }, 0), (CharRange { range: 13..23 }, 1), (CharRange { range: 23..33 }, 2), (CharRange { range: 33..43 }, 3), (CharRange { range: 43..53 }, 4)],
+                    seq![(CharRange { range: 4..14 }, 0), (CharRange { range: 14..24 }, 1), (CharRange { range: 24..34 }, 2), (CharRange { range: 34..44 }, 3), (CharRange { range: 44..54 }, 4)]
+                ],
+                0,
+                seq![(2, 1), (3, 0), (4, 0)]
+            ),
         ));
         assert!(tokenizer_dfa_index_isomorphisms(
-            &(vec![
-                seq![(CharRange{ range: 0..10 }, 1)],
-                seq![(CharRange{ range: 1..11 }, 2)],
-                seq![(CharRange{ range: 2..12 }, 3)],
-                seq![(CharRange{ range: 3..13 }, 4)],
-                seq![(CharRange{ range: 4..14 }, 0)]], 0, seq![(2, 1), (3, 0), (4, 0)]),
-            &(vec![
-                seq![(CharRange{ range: 4..14 }, 1)],
-                seq![(CharRange{ range: 0..10 }, 2)],
-                seq![(CharRange{ range: 1..11 }, 3)],
-                seq![(CharRange{ range: 2..12 }, 4)],
-                seq![(CharRange{ range: 3..13 }, 0)]], 1, seq![(3, 1), (4, 0), (0, 0)]),
+            &(vec![seq![(CharRange { range: 0..10 }, 1)], seq![(CharRange { range: 1..11 }, 2)], seq![(CharRange { range: 2..12 }, 3)], seq![(CharRange { range: 3..13 }, 4)], seq![(CharRange { range: 4..14 }, 0)]], 0, seq![(2, 1), (3, 0), (4, 0)]),
+            &(vec![seq![(CharRange { range: 4..14 }, 1)], seq![(CharRange { range: 0..10 }, 2)], seq![(CharRange { range: 1..11 }, 3)], seq![(CharRange { range: 2..12 }, 4)], seq![(CharRange { range: 3..13 }, 0)]], 1, seq![(3, 1), (4, 0), (0, 0)]),
         ));
         assert!(tokenizer_dfa_index_isomorphisms(
-            &(vec![
-                seq![(CharRange{ range: 0..10 }, 0), (CharRange{ range: 10..20 }, 1), (CharRange{ range: 20..30 }, 2), (CharRange{ range: 30..40 }, 3), (CharRange{ range: 40..50 }, 4)],
-                seq![(CharRange{ range: 1..11 }, 0), (CharRange{ range: 11..21 }, 1), (CharRange{ range: 21..31 }, 2), (CharRange{ range: 31..41 }, 3), (CharRange{ range: 41..51 }, 4)],
-                seq![(CharRange{ range: 2..12 }, 0), (CharRange{ range: 12..22 }, 1), (CharRange{ range: 22..32 }, 2), (CharRange{ range: 32..42 }, 3), (CharRange{ range: 42..52 }, 4)],
-                seq![(CharRange{ range: 3..13 }, 0), (CharRange{ range: 13..23 }, 1), (CharRange{ range: 23..33 }, 2), (CharRange{ range: 33..43 }, 3), (CharRange{ range: 43..53 }, 4)],
-                seq![(CharRange{ range: 4..14 }, 0), (CharRange{ range: 14..24 }, 1), (CharRange{ range: 24..34 }, 2), (CharRange{ range: 34..44 }, 3), (CharRange{ range: 44..54 }, 4)]], 0, seq![(2, 1), (3, 0), (4, 0)]),
-            &(vec![
-                seq![(CharRange{ range: 4..14 }, 1), (CharRange{ range: 14..24 }, 2), (CharRange{ range: 24..34 }, 3), (CharRange{ range: 34..44 }, 4), (CharRange{ range: 44..54 }, 0)],
-                seq![(CharRange{ range: 0..10 }, 1), (CharRange{ range: 10..20 }, 2), (CharRange{ range: 20..30 }, 3), (CharRange{ range: 30..40 }, 4), (CharRange{ range: 40..50 }, 0)],
-                seq![(CharRange{ range: 1..11 }, 1), (CharRange{ range: 11..21 }, 2), (CharRange{ range: 21..31 }, 3), (CharRange{ range: 31..41 }, 4), (CharRange{ range: 41..51 }, 0)],
-                seq![(CharRange{ range: 2..12 }, 1), (CharRange{ range: 12..22 }, 2), (CharRange{ range: 22..32 }, 3), (CharRange{ range: 32..42 }, 4), (CharRange{ range: 42..52 }, 0)],
-                seq![(CharRange{ range: 3..13 }, 1), (CharRange{ range: 13..23 }, 2), (CharRange{ range: 23..33 }, 3), (CharRange{ range: 33..43 }, 4), (CharRange{ range: 43..53 }, 0)]], 1, seq![(3, 1), (4, 0), (0, 0)]),
+            &(
+                vec![
+                    seq![(CharRange { range: 0..10 }, 0), (CharRange { range: 10..20 }, 1), (CharRange { range: 20..30 }, 2), (CharRange { range: 30..40 }, 3), (CharRange { range: 40..50 }, 4)],
+                    seq![(CharRange { range: 1..11 }, 0), (CharRange { range: 11..21 }, 1), (CharRange { range: 21..31 }, 2), (CharRange { range: 31..41 }, 3), (CharRange { range: 41..51 }, 4)],
+                    seq![(CharRange { range: 2..12 }, 0), (CharRange { range: 12..22 }, 1), (CharRange { range: 22..32 }, 2), (CharRange { range: 32..42 }, 3), (CharRange { range: 42..52 }, 4)],
+                    seq![(CharRange { range: 3..13 }, 0), (CharRange { range: 13..23 }, 1), (CharRange { range: 23..33 }, 2), (CharRange { range: 33..43 }, 3), (CharRange { range: 43..53 }, 4)],
+                    seq![(CharRange { range: 4..14 }, 0), (CharRange { range: 14..24 }, 1), (CharRange { range: 24..34 }, 2), (CharRange { range: 34..44 }, 3), (CharRange { range: 44..54 }, 4)]
+                ],
+                0,
+                seq![(2, 1), (3, 0), (4, 0)]
+            ),
+            &(
+                vec![
+                    seq![(CharRange { range: 4..14 }, 1), (CharRange { range: 14..24 }, 2), (CharRange { range: 24..34 }, 3), (CharRange { range: 34..44 }, 4), (CharRange { range: 44..54 }, 0)],
+                    seq![(CharRange { range: 0..10 }, 1), (CharRange { range: 10..20 }, 2), (CharRange { range: 20..30 }, 3), (CharRange { range: 30..40 }, 4), (CharRange { range: 40..50 }, 0)],
+                    seq![(CharRange { range: 1..11 }, 1), (CharRange { range: 11..21 }, 2), (CharRange { range: 21..31 }, 3), (CharRange { range: 31..41 }, 4), (CharRange { range: 41..51 }, 0)],
+                    seq![(CharRange { range: 2..12 }, 1), (CharRange { range: 12..22 }, 2), (CharRange { range: 22..32 }, 3), (CharRange { range: 32..42 }, 4), (CharRange { range: 42..52 }, 0)],
+                    seq![(CharRange { range: 3..13 }, 1), (CharRange { range: 13..23 }, 2), (CharRange { range: 23..33 }, 3), (CharRange { range: 33..43 }, 4), (CharRange { range: 43..53 }, 0)]
+                ],
+                1,
+                seq![(3, 1), (4, 0), (0, 0)]
+            ),
         ));
 
         assert!(!tokenizer_dfa_index_isomorphisms(
-            &(vec![
-                seq![(CharRange{ range: 1..10 }, 0), (CharRange{ range: 10..20 }, 1), (CharRange{ range: 20..30 }, 2), (CharRange{ range: 30..40 }, 3), (CharRange{ range: 40..50 }, 4)],
-                seq![(CharRange{ range: 1..11 }, 0), (CharRange{ range: 11..21 }, 1), (CharRange{ range: 21..31 }, 2), (CharRange{ range: 31..41 }, 3), (CharRange{ range: 41..51 }, 4)],
-                seq![(CharRange{ range: 2..12 }, 0), (CharRange{ range: 12..22 }, 1), (CharRange{ range: 22..32 }, 2), (CharRange{ range: 32..42 }, 3), (CharRange{ range: 42..52 }, 4)],
-                seq![(CharRange{ range: 3..13 }, 0), (CharRange{ range: 13..23 }, 1), (CharRange{ range: 23..33 }, 2), (CharRange{ range: 33..43 }, 3), (CharRange{ range: 43..53 }, 4)],
-                seq![(CharRange{ range: 4..14 }, 0), (CharRange{ range: 14..24 }, 1), (CharRange{ range: 24..34 }, 2), (CharRange{ range: 34..44 }, 3), (CharRange{ range: 44..54 }, 4)]], 0, seq![(2, 1), (3, 0), (4, 0)]),
-            &(vec![
-                seq![(CharRange{ range: 4..14 }, 1), (CharRange{ range: 14..24 }, 2), (CharRange{ range: 24..34 }, 3), (CharRange{ range: 34..44 }, 4), (CharRange{ range: 44..54 }, 0)],
-                seq![(CharRange{ range: 0..10 }, 1), (CharRange{ range: 10..20 }, 2), (CharRange{ range: 20..30 }, 3), (CharRange{ range: 30..40 }, 4), (CharRange{ range: 40..50 }, 0)],
-                seq![(CharRange{ range: 1..11 }, 1), (CharRange{ range: 11..21 }, 2), (CharRange{ range: 21..31 }, 3), (CharRange{ range: 31..41 }, 4), (CharRange{ range: 41..51 }, 0)],
-                seq![(CharRange{ range: 2..12 }, 1), (CharRange{ range: 12..22 }, 2), (CharRange{ range: 22..32 }, 3), (CharRange{ range: 32..42 }, 4), (CharRange{ range: 42..52 }, 0)],
-                seq![(CharRange{ range: 3..13 }, 1), (CharRange{ range: 13..23 }, 2), (CharRange{ range: 23..33 }, 3), (CharRange{ range: 33..43 }, 4), (CharRange{ range: 43..53 }, 0)]], 1, seq![(3, 1), (4, 0), (0, 0)]),
+            &(
+                vec![
+                    seq![(CharRange { range: 1..10 }, 0), (CharRange { range: 10..20 }, 1), (CharRange { range: 20..30 }, 2), (CharRange { range: 30..40 }, 3), (CharRange { range: 40..50 }, 4)],
+                    seq![(CharRange { range: 1..11 }, 0), (CharRange { range: 11..21 }, 1), (CharRange { range: 21..31 }, 2), (CharRange { range: 31..41 }, 3), (CharRange { range: 41..51 }, 4)],
+                    seq![(CharRange { range: 2..12 }, 0), (CharRange { range: 12..22 }, 1), (CharRange { range: 22..32 }, 2), (CharRange { range: 32..42 }, 3), (CharRange { range: 42..52 }, 4)],
+                    seq![(CharRange { range: 3..13 }, 0), (CharRange { range: 13..23 }, 1), (CharRange { range: 23..33 }, 2), (CharRange { range: 33..43 }, 3), (CharRange { range: 43..53 }, 4)],
+                    seq![(CharRange { range: 4..14 }, 0), (CharRange { range: 14..24 }, 1), (CharRange { range: 24..34 }, 2), (CharRange { range: 34..44 }, 3), (CharRange { range: 44..54 }, 4)]
+                ],
+                0,
+                seq![(2, 1), (3, 0), (4, 0)]
+            ),
+            &(
+                vec![
+                    seq![(CharRange { range: 4..14 }, 1), (CharRange { range: 14..24 }, 2), (CharRange { range: 24..34 }, 3), (CharRange { range: 34..44 }, 4), (CharRange { range: 44..54 }, 0)],
+                    seq![(CharRange { range: 0..10 }, 1), (CharRange { range: 10..20 }, 2), (CharRange { range: 20..30 }, 3), (CharRange { range: 30..40 }, 4), (CharRange { range: 40..50 }, 0)],
+                    seq![(CharRange { range: 1..11 }, 1), (CharRange { range: 11..21 }, 2), (CharRange { range: 21..31 }, 3), (CharRange { range: 31..41 }, 4), (CharRange { range: 41..51 }, 0)],
+                    seq![(CharRange { range: 2..12 }, 1), (CharRange { range: 12..22 }, 2), (CharRange { range: 22..32 }, 3), (CharRange { range: 32..42 }, 4), (CharRange { range: 42..52 }, 0)],
+                    seq![(CharRange { range: 3..13 }, 1), (CharRange { range: 13..23 }, 2), (CharRange { range: 23..33 }, 3), (CharRange { range: 33..43 }, 4), (CharRange { range: 43..53 }, 0)]
+                ],
+                1,
+                seq![(3, 1), (4, 0), (0, 0)]
+            ),
         ));
         assert!(!tokenizer_dfa_index_isomorphisms(
-            &(vec![
-                seq![(CharRange{ range: 0..10 }, 0), (CharRange{ range: 10..20 }, 1), (CharRange{ range: 20..30 }, 2), (CharRange{ range: 30..40 }, 3), (CharRange{ range: 40..50 }, 4)],
-                seq![(CharRange{ range: 1..11 }, 0), (CharRange{ range: 11..21 }, 1), (CharRange{ range: 21..31 }, 2), (CharRange{ range: 31..41 }, 3), (CharRange{ range: 41..51 }, 4)],
-                seq![(CharRange{ range: 2..12 }, 0), (CharRange{ range: 12..22 }, 1), (CharRange{ range: 22..32 }, 2), (CharRange{ range: 32..42 }, 3), (CharRange{ range: 42..52 }, 4)],
-                seq![(CharRange{ range: 3..13 }, 0), (CharRange{ range: 13..23 }, 1), (CharRange{ range: 23..33 }, 2), (CharRange{ range: 33..43 }, 3), (CharRange{ range: 43..53 }, 4)],
-                seq![(CharRange{ range: 4..14 }, 0), (CharRange{ range: 14..24 }, 1), (CharRange{ range: 24..34 }, 2), (CharRange{ range: 34..44 }, 3), (CharRange{ range: 44..54 }, 4)]], 0, seq![(2, 1), (3, 0), (4, 0)]),
-            &(vec![
-                seq![(CharRange{ range: 4..14 }, 1), (CharRange{ range: 14..24 }, 2), (CharRange{ range: 24..34 }, 3), (CharRange{ range: 34..44 }, 4), (CharRange{ range: 44..54 }, 0)],
-                seq![(CharRange{ range: 0..10 }, 1), (CharRange{ range: 10..20 }, 2), (CharRange{ range: 20..30 }, 3), (CharRange{ range: 30..40 }, 4), (CharRange{ range: 40..50 }, 0)],
-                seq![(CharRange{ range: 1..11 }, 1), (CharRange{ range: 11..21 }, 2), (CharRange{ range: 21..31 }, 3), (CharRange{ range: 31..41 }, 4), (CharRange{ range: 41..51 }, 0)],
-                seq![(CharRange{ range: 2..12 }, 1), (CharRange{ range: 12..22 }, 2), (CharRange{ range: 22..32 }, 3), (CharRange{ range: 32..42 }, 4), (CharRange{ range: 42..52 }, 0)],
-                seq![(CharRange{ range: 3..13 }, 1), (CharRange{ range: 13..23 }, 2), (CharRange{ range: 23..33 }, 3), (CharRange{ range: 33..43 }, 4), (CharRange{ range: 43..53 }, 0)]], 1, seq![(3, 1), (4, 0), (1, 0)]),
+            &(
+                vec![
+                    seq![(CharRange { range: 0..10 }, 0), (CharRange { range: 10..20 }, 1), (CharRange { range: 20..30 }, 2), (CharRange { range: 30..40 }, 3), (CharRange { range: 40..50 }, 4)],
+                    seq![(CharRange { range: 1..11 }, 0), (CharRange { range: 11..21 }, 1), (CharRange { range: 21..31 }, 2), (CharRange { range: 31..41 }, 3), (CharRange { range: 41..51 }, 4)],
+                    seq![(CharRange { range: 2..12 }, 0), (CharRange { range: 12..22 }, 1), (CharRange { range: 22..32 }, 2), (CharRange { range: 32..42 }, 3), (CharRange { range: 42..52 }, 4)],
+                    seq![(CharRange { range: 3..13 }, 0), (CharRange { range: 13..23 }, 1), (CharRange { range: 23..33 }, 2), (CharRange { range: 33..43 }, 3), (CharRange { range: 43..53 }, 4)],
+                    seq![(CharRange { range: 4..14 }, 0), (CharRange { range: 14..24 }, 1), (CharRange { range: 24..34 }, 2), (CharRange { range: 34..44 }, 3), (CharRange { range: 44..54 }, 4)]
+                ],
+                0,
+                seq![(2, 1), (3, 0), (4, 0)]
+            ),
+            &(
+                vec![
+                    seq![(CharRange { range: 4..14 }, 1), (CharRange { range: 14..24 }, 2), (CharRange { range: 24..34 }, 3), (CharRange { range: 34..44 }, 4), (CharRange { range: 44..54 }, 0)],
+                    seq![(CharRange { range: 0..10 }, 1), (CharRange { range: 10..20 }, 2), (CharRange { range: 20..30 }, 3), (CharRange { range: 30..40 }, 4), (CharRange { range: 40..50 }, 0)],
+                    seq![(CharRange { range: 1..11 }, 1), (CharRange { range: 11..21 }, 2), (CharRange { range: 21..31 }, 3), (CharRange { range: 31..41 }, 4), (CharRange { range: 41..51 }, 0)],
+                    seq![(CharRange { range: 2..12 }, 1), (CharRange { range: 12..22 }, 2), (CharRange { range: 22..32 }, 3), (CharRange { range: 32..42 }, 4), (CharRange { range: 42..52 }, 0)],
+                    seq![(CharRange { range: 3..13 }, 1), (CharRange { range: 13..23 }, 2), (CharRange { range: 23..33 }, 3), (CharRange { range: 33..43 }, 4), (CharRange { range: 43..53 }, 0)]
+                ],
+                1,
+                seq![(3, 1), (4, 0), (1, 0)]
+            ),
         ));
         assert!(!tokenizer_dfa_index_isomorphisms(
-            &(vec![
-                seq![(CharRange{ range: 0..10 }, 0), (CharRange{ range: 10..20 }, 1), (CharRange{ range: 20..30 }, 2), (CharRange{ range: 30..40 }, 3), (CharRange{ range: 40..50 }, 4)],
-                seq![(CharRange{ range: 1..11 }, 0), (CharRange{ range: 11..21 }, 1), (CharRange{ range: 21..31 }, 2), (CharRange{ range: 31..41 }, 3), (CharRange{ range: 41..51 }, 4)],
-                seq![(CharRange{ range: 2..12 }, 0), (CharRange{ range: 12..22 }, 1), (CharRange{ range: 22..32 }, 2), (CharRange{ range: 32..42 }, 3), (CharRange{ range: 42..52 }, 4)],
-                seq![(CharRange{ range: 3..13 }, 0), (CharRange{ range: 13..23 }, 1), (CharRange{ range: 23..33 }, 2), (CharRange{ range: 33..43 }, 3), (CharRange{ range: 43..53 }, 4)],
-                seq![(CharRange{ range: 4..14 }, 0), (CharRange{ range: 14..24 }, 1), (CharRange{ range: 24..34 }, 2), (CharRange{ range: 34..44 }, 3), (CharRange{ range: 44..54 }, 4)]], 0, seq![(2, 1), (3, 0), (4, 0)]),
-            &(vec![
-                seq![(CharRange{ range: 4..14 }, 1), (CharRange{ range: 14..24 }, 2), (CharRange{ range: 24..34 }, 3), (CharRange{ range: 34..44 }, 4), (CharRange{ range: 44..54 }, 0)],
-                seq![(CharRange{ range: 0..10 }, 1), (CharRange{ range: 10..20 }, 2), (CharRange{ range: 20..30 }, 3), (CharRange{ range: 30..40 }, 4), (CharRange{ range: 40..50 }, 0)],
-                seq![(CharRange{ range: 1..11 }, 1), (CharRange{ range: 11..21 }, 2), (CharRange{ range: 21..31 }, 3), (CharRange{ range: 31..41 }, 4), (CharRange{ range: 41..51 }, 0)],
-                seq![(CharRange{ range: 2..12 }, 1), (CharRange{ range: 12..22 }, 2), (CharRange{ range: 22..32 }, 3), (CharRange{ range: 32..42 }, 4), (CharRange{ range: 42..52 }, 0)],
-                seq![(CharRange{ range: 3..13 }, 1), (CharRange{ range: 13..23 }, 2), (CharRange{ range: 23..33 }, 3), (CharRange{ range: 33..43 }, 4), (CharRange{ range: 43..53 }, 0)]], 1, seq![(3, 1), (4, 0), (0, 1)]),
+            &(
+                vec![
+                    seq![(CharRange { range: 0..10 }, 0), (CharRange { range: 10..20 }, 1), (CharRange { range: 20..30 }, 2), (CharRange { range: 30..40 }, 3), (CharRange { range: 40..50 }, 4)],
+                    seq![(CharRange { range: 1..11 }, 0), (CharRange { range: 11..21 }, 1), (CharRange { range: 21..31 }, 2), (CharRange { range: 31..41 }, 3), (CharRange { range: 41..51 }, 4)],
+                    seq![(CharRange { range: 2..12 }, 0), (CharRange { range: 12..22 }, 1), (CharRange { range: 22..32 }, 2), (CharRange { range: 32..42 }, 3), (CharRange { range: 42..52 }, 4)],
+                    seq![(CharRange { range: 3..13 }, 0), (CharRange { range: 13..23 }, 1), (CharRange { range: 23..33 }, 2), (CharRange { range: 33..43 }, 3), (CharRange { range: 43..53 }, 4)],
+                    seq![(CharRange { range: 4..14 }, 0), (CharRange { range: 14..24 }, 1), (CharRange { range: 24..34 }, 2), (CharRange { range: 34..44 }, 3), (CharRange { range: 44..54 }, 4)]
+                ],
+                0,
+                seq![(2, 1), (3, 0), (4, 0)]
+            ),
+            &(
+                vec![
+                    seq![(CharRange { range: 4..14 }, 1), (CharRange { range: 14..24 }, 2), (CharRange { range: 24..34 }, 3), (CharRange { range: 34..44 }, 4), (CharRange { range: 44..54 }, 0)],
+                    seq![(CharRange { range: 0..10 }, 1), (CharRange { range: 10..20 }, 2), (CharRange { range: 20..30 }, 3), (CharRange { range: 30..40 }, 4), (CharRange { range: 40..50 }, 0)],
+                    seq![(CharRange { range: 1..11 }, 1), (CharRange { range: 11..21 }, 2), (CharRange { range: 21..31 }, 3), (CharRange { range: 31..41 }, 4), (CharRange { range: 41..51 }, 0)],
+                    seq![(CharRange { range: 2..12 }, 1), (CharRange { range: 12..22 }, 2), (CharRange { range: 22..32 }, 3), (CharRange { range: 32..42 }, 4), (CharRange { range: 42..52 }, 0)],
+                    seq![(CharRange { range: 3..13 }, 1), (CharRange { range: 13..23 }, 2), (CharRange { range: 23..33 }, 3), (CharRange { range: 33..43 }, 4), (CharRange { range: 43..53 }, 0)]
+                ],
+                1,
+                seq![(3, 1), (4, 0), (0, 1)]
+            ),
         ));
     }
 
@@ -466,50 +496,102 @@ mod tests {
         let nfa = TokenizerNFA::try_from(vec![
             Hir::class(Class::Unicode(ClassUnicode::new(vec![ClassUnicodeRange::new('a', 'a')]))),
             Hir::class(Class::Unicode(ClassUnicode::new(vec![ClassUnicodeRange::new('a', 'c')]))),
-            Hir::class(Class::Unicode(ClassUnicode::new(vec![ClassUnicodeRange::new('c', 'f')])))]).unwrap();
+            Hir::class(Class::Unicode(ClassUnicode::new(vec![ClassUnicodeRange::new('c', 'f')]))),
+        ])
+        .unwrap();
         let (dfa, warnings): (TokenizerDFA, Vec<_>) = nfa.into();
-        assert!(tokenizer_dfa_index_isomorphisms(&tokenizer_dfa_to_index(&dfa), &(vec![seq![(CharRange{range: 'a' as u32..'a' as u32 + 1 },1),(CharRange{range: 'b' as u32..'b' as u32 + 1},2),(CharRange{range: 'c' as u32..'c' as u32 + 1},3),(CharRange{range: 'd' as u32..'f' as u32 + 1},4)], seq![], seq![], seq![], seq![]], 0, seq![(1,0),(2,1),(3,1),(4,2)])));
+        assert!(tokenizer_dfa_index_isomorphisms(
+            &tokenizer_dfa_to_index(&dfa),
+            &(
+                vec![
+                    seq![(CharRange { range: 'a' as u32..'a' as u32 + 1 }, 1), (CharRange { range: 'b' as u32..'b' as u32 + 1 }, 2), (CharRange { range: 'c' as u32..'c' as u32 + 1 }, 3), (CharRange { range: 'd' as u32..'f' as u32 + 1 }, 4)],
+                    seq![],
+                    seq![],
+                    seq![],
+                    seq![]
+                ],
+                0,
+                seq![(1, 0), (2, 1), (3, 1), (4, 2)]
+            )
+        ));
         assert_eq!(HashSet::<DFAConstructWarning>::from_iter(warnings.into_iter()), seq![DFAConstructWarning::EndConflict(1, 0), DFAConstructWarning::EndConflict(2, 1)]);
-        assert!(tokenizer_dfa_index_isomorphisms(&tokenizer_dfa_to_index(&dfa.minify()), &(vec![seq![(CharRange{range: 'a' as u32..'a' as u32 + 1 },1),(CharRange{range: 'b' as u32..'c' as u32 + 1 },2),(CharRange{range: 'd' as u32..'f' as u32 + 1 },3)], seq![], seq![], seq![]], 0, seq![(1,0),(2,1),(3,2)])));
+        assert!(tokenizer_dfa_index_isomorphisms(
+            &tokenizer_dfa_to_index(&dfa.minify()),
+            &(vec![seq![(CharRange { range: 'a' as u32..'a' as u32 + 1 }, 1), (CharRange { range: 'b' as u32..'c' as u32 + 1 }, 2), (CharRange { range: 'd' as u32..'f' as u32 + 1 }, 3)], seq![], seq![], seq![]], 0, seq![(1, 0), (2, 1), (3, 2)])
+        ));
 
         let nfa = TokenizerNFA::try_from(vec!["([a-zA-Z]{2})*"]).unwrap();
         let (dfa, _) = nfa.into();
         let dfa: TokenizerDFA = dfa.minify();
-        assert!(tokenizer_dfa_index_isomorphisms(&tokenizer_dfa_to_index(&dfa), &(vec![seq![(CharRange{ range: 'a' as u32..'z' as u32 + 1 }, 1), (CharRange{ range: 'A' as u32..'Z' as u32 + 1 }, 1)], seq![(CharRange{ range: 'a' as u32..'z' as u32 + 1 }, 0), (CharRange{ range: 'A' as u32..'Z' as u32 + 1 }, 0)]], 0, seq![(0, 0)])));
+        assert!(tokenizer_dfa_index_isomorphisms(
+            &tokenizer_dfa_to_index(&dfa),
+            &(
+                vec![seq![(CharRange { range: 'a' as u32..'z' as u32 + 1 }, 1), (CharRange { range: 'A' as u32..'Z' as u32 + 1 }, 1)], seq![(CharRange { range: 'a' as u32..'z' as u32 + 1 }, 0), (CharRange { range: 'A' as u32..'Z' as u32 + 1 }, 0)]],
+                0,
+                seq![(0, 0)]
+            )
+        ));
 
         let nfa = TokenizerNFA::try_from(vec!["(.|\\n){2,5}"]).unwrap();
         let (dfa, _) = nfa.into();
         let dfa: TokenizerDFA = dfa.minify();
-        assert!(tokenizer_dfa_index_isomorphisms(&tokenizer_dfa_to_index(&dfa), &(vec![seq![(CharRange{ range: 0..'\u{10ffff}' as u32 + 1 }, 1)], seq![(CharRange{ range: 0..'\u{10ffff}' as u32 + 1 }, 2)], seq![(CharRange{ range: 0..'\u{10ffff}' as u32 + 1 }, 3)], seq![(CharRange{ range: 0..'\u{10ffff}' as u32 + 1 }, 4)], seq![(CharRange{ range: 0..'\u{10ffff}' as u32 + 1 }, 5)], seq![]], 0, seq![(2, 0), (3, 0), (4, 0), (5, 0)])));
+        assert!(tokenizer_dfa_index_isomorphisms(
+            &tokenizer_dfa_to_index(&dfa),
+            &(
+                vec![
+                    seq![(CharRange { range: 0..'\u{10ffff}' as u32 + 1 }, 1)],
+                    seq![(CharRange { range: 0..'\u{10ffff}' as u32 + 1 }, 2)],
+                    seq![(CharRange { range: 0..'\u{10ffff}' as u32 + 1 }, 3)],
+                    seq![(CharRange { range: 0..'\u{10ffff}' as u32 + 1 }, 4)],
+                    seq![(CharRange { range: 0..'\u{10ffff}' as u32 + 1 }, 5)],
+                    seq![]
+                ],
+                0,
+                seq![(2, 0), (3, 0), (4, 0), (5, 0)]
+            )
+        ));
 
         let nfa = TokenizerNFA::try_from(vec!["みみ[た-ゎ]", "てめた*", "ぺ[ぼ-るゎ-わ]*ぅ"]).unwrap();
         let (dfa, _) = nfa.into();
         let dfa: TokenizerDFA = dfa.minify();
-        assert!(tokenizer_dfa_index_isomorphisms(&tokenizer_dfa_to_index(&dfa),
-                                                 &(vec![
-                                                     seq![(range!('み'), 1), (range!('て'), 4), (range!('ぺ'), 6)],
-                                                     seq![(range!('み'), 2)],
-                                                     seq![(range!('た', 'ゎ'), 3)],
-                                                     seq![],
-                                                     seq![(range!('め'), 5)],
-                                                     seq![(range!('た'), 5)],
-                                                     seq![(range!('ぼ', 'る'), 6), (range!('ゎ', 'わ'), 6), (range!('ぅ'), 7)],
-                                                     seq![]
-                                                 ], 0, seq![(3, 0), (5, 1), (7, 2)])));
+        assert!(tokenizer_dfa_index_isomorphisms(
+            &tokenizer_dfa_to_index(&dfa),
+            &(
+                vec![
+                    seq![(range!('み'), 1), (range!('て'), 4), (range!('ぺ'), 6)],
+                    seq![(range!('み'), 2)],
+                    seq![(range!('た', 'ゎ'), 3)],
+                    seq![],
+                    seq![(range!('め'), 5)],
+                    seq![(range!('た'), 5)],
+                    seq![(range!('ぼ', 'る'), 6), (range!('ゎ', 'わ'), 6), (range!('ぅ'), 7)],
+                    seq![]
+                ],
+                0,
+                seq![(3, 0), (5, 1), (7, 2)]
+            )
+        ));
 
         let nfa = TokenizerNFA::try_from(vec!["int|long", "[a-zA-Z][a-zA-Z0-9]*"]).unwrap();
         let (dfa, _) = nfa.into();
         let dfa: TokenizerDFA = dfa.minify();
-        assert!(tokenizer_dfa_index_isomorphisms(&tokenizer_dfa_to_index(&dfa), &(vec![
-            seq![(range!('a','h'), 1), (range!('j','k'), 1), (range!('m','z'), 1), (range!('A','Z'), 1), (range!('i'), 2), (range!('l'), 5)],
-            seq![(range!('a','z'), 1), (range!('A','Z'), 1), (range!('0','9'), 1)],
-            seq![(range!('a','m'), 1), (range!('o','z'), 1), (range!('A','Z'), 1), (range!('0','9'), 1), (range!('n'), 3)],
-            seq![(range!('a','s'), 1), (range!('u','z'), 1), (range!('A','Z'), 1), (range!('0','9'), 1), (range!('t'), 4)],
-            seq![(range!('a','z'), 1), (range!('A','Z'), 1), (range!('0','9'), 1)],
-            seq![(range!('a','n'), 1), (range!('p','z'), 1), (range!('A','Z'), 1), (range!('0','9'), 1), (range!('o'), 6)],
-            seq![(range!('a','m'), 1), (range!('o','z'), 1), (range!('A','Z'), 1), (range!('0','9'), 1), (range!('n'), 7)],
-            seq![(range!('a','f'), 1), (range!('h','z'), 1), (range!('A','Z'), 1), (range!('0','9'), 1), (range!('g'), 4)]
-        ], 0, seq![(1, 1), (2, 1), (3, 1), (4, 0), (5, 1), (6, 1), (7, 1)])));
+        assert!(tokenizer_dfa_index_isomorphisms(
+            &tokenizer_dfa_to_index(&dfa),
+            &(
+                vec![
+                    seq![(range!('a', 'h'), 1), (range!('j', 'k'), 1), (range!('m', 'z'), 1), (range!('A', 'Z'), 1), (range!('i'), 2), (range!('l'), 5)],
+                    seq![(range!('a', 'z'), 1), (range!('A', 'Z'), 1), (range!('0', '9'), 1)],
+                    seq![(range!('a', 'm'), 1), (range!('o', 'z'), 1), (range!('A', 'Z'), 1), (range!('0', '9'), 1), (range!('n'), 3)],
+                    seq![(range!('a', 's'), 1), (range!('u', 'z'), 1), (range!('A', 'Z'), 1), (range!('0', '9'), 1), (range!('t'), 4)],
+                    seq![(range!('a', 'z'), 1), (range!('A', 'Z'), 1), (range!('0', '9'), 1)],
+                    seq![(range!('a', 'n'), 1), (range!('p', 'z'), 1), (range!('A', 'Z'), 1), (range!('0', '9'), 1), (range!('o'), 6)],
+                    seq![(range!('a', 'm'), 1), (range!('o', 'z'), 1), (range!('A', 'Z'), 1), (range!('0', '9'), 1), (range!('n'), 7)],
+                    seq![(range!('a', 'f'), 1), (range!('h', 'z'), 1), (range!('A', 'Z'), 1), (range!('0', '9'), 1), (range!('g'), 4)]
+                ],
+                0,
+                seq![(1, 1), (2, 1), (3, 1), (4, 0), (5, 1), (6, 1), (7, 1)]
+            )
+        ));
 
         // for i in 0..100 {
         //     let mut rng = rand::thread_rng();
@@ -535,7 +617,9 @@ mod tests {
                 loop {
                     let begin = rng.gen_range(min..=CHAR_END as u32 + if ranges.len() > 0 { 1 } else { 0 });
                     let end = rng.gen_range(begin..=CHAR_END as u32 + if ranges.len() > 0 { 1 } else { 0 });
-                    if end - 1 == CHAR_END as u32 { break; }
+                    if end - 1 == CHAR_END as u32 {
+                        break;
+                    }
                     ranges.push(ClassUnicodeRange::new(char::try_from(begin).unwrap(), char::try_from(end).unwrap()));
                     min = end + 1;
                 }
@@ -554,17 +638,13 @@ mod tests {
                                 let m = rng.gen_range(0..10);
                                 RepetitionRange::Bounded(m, rng.gen_range(m..=10))
                             }
-                            _ => unreachable!()
+                            _ => unreachable!(),
                         };
                         RepetitionKind::Range(range)
                     }
-                    _ => unreachable!()
+                    _ => unreachable!(),
                 };
-                Hir::repetition(Repetition {
-                    kind,
-                    greedy: false,
-                    hir: Box::new(random_hir(rng)),
-                })
+                Hir::repetition(Repetition { kind, greedy: false, hir: Box::new(random_hir(rng)) })
             }
             3 => {
                 let mut vec = Vec::new();
@@ -580,7 +660,7 @@ mod tests {
                 }
                 Hir::alternation(vec)
             }
-            _ => unreachable!()
+            _ => unreachable!(),
         }
     }
 }

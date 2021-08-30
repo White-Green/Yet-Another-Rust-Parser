@@ -1,6 +1,7 @@
 use std::cmp::Ordering;
-use std::fmt::{Debug, Formatter};
+use std::error::Error;
 use std::fmt;
+use std::fmt::{Debug, Formatter};
 use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;
 
@@ -10,102 +11,92 @@ use crate::parser::SymbolInternal;
 use crate::Symbol;
 
 #[derive(Debug, PartialEq)]
-pub struct Syntax<N, T> {
-    pub(crate) rules: Vec<Rule<N, T>>,
+pub struct Syntax<N, T, E = Box<dyn Error + Send + Sync + 'static>> {
+    pub(crate) rules: Vec<Rule<N, T, E>>,
     pub(crate) start: usize,
 }
 
-impl<N: EnumIndex, T: EnumIndex> Syntax<N, T> {
-    pub fn builder() -> SyntaxBuilder<N, T> {
+impl<N: EnumIndex, T: EnumIndex, E> Syntax<N, T, E> {
+    pub fn builder() -> SyntaxBuilder<N, T, E> {
         Default::default()
     }
 
-    pub fn into_rules(self) -> Vec<Rule<N, T>> {
+    pub fn into_rules(self) -> Vec<Rule<N, T, E>> {
         self.rules
     }
 }
 
 #[derive(Debug, PartialEq)]
-pub struct SyntaxBuilder<N, T> {
-    rules: Vec<Rule<N, T>>,
+pub struct SyntaxBuilder<N, T, E = Box<dyn Error + Send + Sync + 'static>> {
+    rules: Vec<Rule<N, T, E>>,
 }
 
-impl<N, T> Default for SyntaxBuilder<N, T> {
+impl<N, T, E> Default for SyntaxBuilder<N, T, E> {
     fn default() -> Self {
         Self { rules: Vec::new() }
     }
 }
 
-impl<N: EnumIndex, T: EnumIndex> SyntaxBuilder<N, T> {
+impl<N: EnumIndex, T: EnumIndex, E> SyntaxBuilder<N, T, E> {
     pub fn new() -> Self {
         Default::default()
     }
 
-    pub fn rule(mut self, rule: Rule<N, T>) -> Self {
+    pub fn rule(mut self, rule: Rule<N, T, E>) -> Self {
         self.rules.push(rule);
         self
     }
 
-    pub fn build(self, start: N) -> Syntax<N, T> {
+    pub fn build(self, start: N) -> Syntax<N, T, E> {
         let SyntaxBuilder { rules } = self;
-        Syntax {
-            rules,
-            start: start.enum_index(),
-        }
+        Syntax { rules, start: start.enum_index() }
     }
 
-    pub fn build_raw(self, start: usize) -> Syntax<N, T> {
+    pub fn build_raw(self, start: usize) -> Syntax<N, T, E> {
         let SyntaxBuilder { rules } = self;
-        Syntax {
-            rules,
-            start,
-        }
+        Syntax { rules, start }
     }
 }
 
-pub struct Rule<N, T> {
+pub struct Rule<N, T, E = Box<dyn Error + Send + Sync + 'static>> {
     pub(crate) non_terminal: usize,
-    pub(crate) symbols: Vec<SymbolInternal<usize, TerminalSymbol<usize>>>,
-    pub(crate) generator: Box<dyn Fn(&mut [Symbol<&mut N, &T>]) -> N>,
-    phantom: PhantomData<(N, T)>,
+    pub(crate) symbols: Vec<SymbolInternal<usize, TerminalSymbol<usize, ()>>>,
+    pub(crate) generator: Box<dyn Fn(&mut [Symbol<&mut N, &T, &[T]>]) -> Result<N, E>>,
+    phantom: PhantomData<(N, T, E)>,
 }
 
 #[derive(Debug)]
 pub struct RuleBuilder<N, T> {
     pub(crate) non_terminal: usize,
-    pub(crate) symbols: Vec<SymbolInternal<usize, TerminalSymbol<usize>>>,
+    pub(crate) symbols: Vec<SymbolInternal<usize, TerminalSymbol<usize, ()>>>,
     phantom: PhantomData<(N, T)>,
 }
 
-impl<N, T> Debug for Rule<N, T> {
+impl<N, T, E> Debug for Rule<N, T, E> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Rule")
-            .field("non_terminal", &self.non_terminal)
-            .field("symbols", &self.symbols)
-            .finish()
+        f.debug_struct("Rule").field("non_terminal", &self.non_terminal).field("symbols", &self.symbols).finish()
     }
 }
 
-impl<N, T> PartialEq for Rule<N, T> {
+impl<N, T, E> PartialEq for Rule<N, T, E> {
     fn eq(&self, other: &Self) -> bool {
-        self.non_terminal == other.non_terminal &&
-            self.symbols == other.symbols
+        self.non_terminal == other.non_terminal && self.symbols == other.symbols
     }
 }
 
-impl<N, T> Eq for Rule<N, T> {}
+impl<N, T, E> Eq for Rule<N, T, E> {}
 
-impl<N, T> PartialOrd for Rule<N, T> {
+impl<N, T, E> PartialOrd for Rule<N, T, E> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         match self.non_terminal.partial_cmp(&other.non_terminal) {
             Some(Ordering::Equal) => {}
-            other => return other
+            other => return other,
         }
         self.symbols.partial_cmp(&other.symbols)
     }
 }
 
-impl<N, T> Ord for Rule<N, T> {
+impl<N, T, E> Ord for Rule<N, T, E> {
     fn cmp(&self, other: &Self) -> Ordering {
         match self.non_terminal.cmp(&other.non_terminal) {
             Ordering::Equal => {}
@@ -115,7 +106,7 @@ impl<N, T> Ord for Rule<N, T> {
     }
 }
 
-impl<N, T> Hash for Rule<N, T> {
+impl<N, T, E> Hash for Rule<N, T, E> {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.non_terminal.hash(state);
         self.symbols.hash(state);
@@ -123,49 +114,55 @@ impl<N, T> Hash for Rule<N, T> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Ord, PartialOrd, Hash)]
-pub enum TerminalSymbol<T> {
+pub enum TerminalSymbol<T, E> {
     Symbol(T),
-    Error,
+    Error(E),
     EOI,
 }
 
-impl<N: EnumIndex, T: EnumIndex> Rule<N, T> {
-    pub fn new<F: 'static + Fn(&mut [Symbol<&mut N, &T>]) -> N>(start: N, rule: &[Symbol<N, T>], generator: F) -> Rule<N, T> {
+impl<N: EnumIndex, T: EnumIndex, E> Rule<N, T, E> {
+    pub fn new<F: 'static + Fn(&mut [Symbol<&mut N, &T, &[T]>]) -> Result<N, E>>(start: N, rule: &[Symbol<N, T, ()>], generator: F) -> Rule<N, T, E> {
         Rule {
             non_terminal: start.enum_index(),
-            symbols: rule.iter().map(|symbol| match symbol {
-                Symbol::NonTerminal(n) => SymbolInternal::NonTerminal(n.enum_index()),
-                Symbol::Terminal(t) => SymbolInternal::Terminal(TerminalSymbol::Symbol(t.enum_index())),
-                Symbol::Error => SymbolInternal::Terminal(TerminalSymbol::Error)
-            }).collect(),
+            symbols: rule
+                .iter()
+                .map(|symbol| match symbol {
+                    Symbol::NonTerminal(n) => SymbolInternal::NonTerminal(n.enum_index()),
+                    Symbol::Terminal(t) => SymbolInternal::Terminal(TerminalSymbol::Symbol(t.enum_index())),
+                    Symbol::Error(_) => SymbolInternal::Terminal(TerminalSymbol::Error(())),
+                })
+                .collect(),
             generator: Box::new(generator),
             phantom: Default::default(),
         }
     }
 
-    pub fn new_raw<F: 'static + Fn(&mut [Symbol<&mut N, &T>]) -> N>(start: usize, rule: &[Symbol<usize, usize>], generator: F) -> Rule<N, T> {
+    pub fn new_raw<F: 'static + Fn(&mut [Symbol<&mut N, &T, &[T]>]) -> Result<N, E>>(start: usize, rule: &[Symbol<usize, usize, ()>], generator: F) -> Rule<N, T, E> {
         Rule {
             non_terminal: start,
-            symbols: rule.iter().map(|symbol| match symbol {
-                Symbol::NonTerminal(n) => SymbolInternal::NonTerminal(*n),
-                Symbol::Terminal(t) => SymbolInternal::Terminal(TerminalSymbol::Symbol(*t)),
-                Symbol::Error => SymbolInternal::Terminal(TerminalSymbol::Error)
-            }).collect(),
+            symbols: rule
+                .iter()
+                .map(|symbol| match symbol {
+                    Symbol::NonTerminal(n) => SymbolInternal::NonTerminal(*n),
+                    Symbol::Terminal(t) => SymbolInternal::Terminal(TerminalSymbol::Symbol(*t)),
+                    Symbol::Error(_) => SymbolInternal::Terminal(TerminalSymbol::Error(())),
+                })
+                .collect(),
             generator: Box::new(generator),
             phantom: Default::default(),
         }
     }
 
     pub fn builder(example: N) -> RuleBuilder<N, T> {
-        RuleBuilder { non_terminal: example.enum_index(), symbols: Vec::new(), phantom: Default::default() }
-    }
-
-    pub(crate) fn builder_raw(non_terminal: usize) -> RuleBuilder<N, T> {
         RuleBuilder {
-            non_terminal,
+            non_terminal: example.enum_index(),
             symbols: Vec::new(),
             phantom: Default::default(),
         }
+    }
+
+    pub(crate) fn builder_raw(non_terminal: usize) -> RuleBuilder<N, T> {
+        RuleBuilder { non_terminal, symbols: Vec::new(), phantom: Default::default() }
     }
 }
 
@@ -186,11 +183,11 @@ impl<N: EnumIndex, T: EnumIndex> RuleBuilder<N, T> {
     }
 
     pub fn error(mut self) -> Self {
-        self.symbols.push(SymbolInternal::Terminal(TerminalSymbol::Error));
+        self.symbols.push(SymbolInternal::Terminal(TerminalSymbol::Error(())));
         self
     }
 
-    pub fn build<F: 'static + Fn(&mut [Symbol<&mut N, &T>]) -> N>(self, generator: F) -> Rule<N, T> {
+    pub fn build<E, F: 'static + Fn(&mut [Symbol<&mut N, &T, &[T]>]) -> Result<N, E>>(self, generator: F) -> Rule<N, T, E> {
         Rule {
             non_terminal: self.non_terminal,
             symbols: self.symbols,
@@ -210,14 +207,22 @@ mod tests {
     #[test]
     fn syntax() {
         #[derive(Debug, PartialEq, EnumIndex)]
-        enum N { A, B, C }
+        enum N {
+            A,
+            B,
+            C,
+        }
         #[derive(Debug, PartialEq, EnumIndex)]
-        enum T { A, B, C }
-        let syntax = Syntax::builder()
-            .rule(Rule::builder(N::A).non_terminal(N::B).non_terminal(N::C).terminal(T::A).build(|_| N::A))
-            .rule(Rule::builder(N::A).non_terminal(N::C).terminal(T::B).build(|_| N::A))
-            .rule(Rule::builder(N::B).non_terminal(N::C).build(|_| N::B))
-            .rule(Rule::builder(N::C).terminal(T::C).build(|_| N::C))
+        enum T {
+            A,
+            B,
+            C,
+        }
+        let syntax = Syntax::<_, _>::builder()
+            .rule(Rule::<_, _>::builder(N::A).non_terminal(N::B).non_terminal(N::C).terminal(T::A).build(|_| Ok(N::A)))
+            .rule(Rule::<_, _>::builder(N::A).non_terminal(N::C).terminal(T::B).build(|_| Ok(N::A)))
+            .rule(Rule::<_, _>::builder(N::B).non_terminal(N::C).build(|_| Ok(N::B)))
+            .rule(Rule::<_, _>::builder(N::C).terminal(T::C).build(|_| Ok(N::C)))
             .build(N::A);
         assert_eq!(syntax.start, 0);
 
@@ -231,11 +236,11 @@ mod tests {
         assert_eq!(syntax.rules[2].symbols, vec![SymbolInternal::NonTerminal(2)]);
         assert_eq!(syntax.rules[3].symbols, vec![SymbolInternal::Terminal(TerminalSymbol::Symbol(2))]);
 
-        let syntax = Syntax::builder()
-            .rule(Rule::builder(N::A).error().non_terminal(N::C).terminal(T::A).build(|_| N::A))
-            .rule(Rule::builder(N::A).non_terminal(N::C).error().build(|_| N::A))
-            .rule(Rule::builder(N::B).non_terminal(N::C).build(|_| N::B))
-            .rule(Rule::builder(N::C).terminal(T::C).build(|_| N::C))
+        let syntax = Syntax::<_, _>::builder()
+            .rule(Rule::<_, _>::builder(N::A).error().non_terminal(N::C).terminal(T::A).build(|_| Ok(N::A)))
+            .rule(Rule::<_, _>::builder(N::A).non_terminal(N::C).error().build(|_| Ok(N::A)))
+            .rule(Rule::<_, _>::builder(N::B).non_terminal(N::C).build(|_| Ok(N::B)))
+            .rule(Rule::<_, _>::builder(N::C).terminal(T::C).build(|_| Ok(N::C)))
             .build(N::A);
 
         assert_eq!(syntax.start, 0);
@@ -245,8 +250,8 @@ mod tests {
         assert_eq!(syntax.rules[2].non_terminal, 1);
         assert_eq!(syntax.rules[3].non_terminal, 2);
 
-        assert_eq!(syntax.rules[0].symbols, vec![SymbolInternal::Terminal(TerminalSymbol::Error), SymbolInternal::NonTerminal(2), SymbolInternal::Terminal(TerminalSymbol::Symbol(0))]);
-        assert_eq!(syntax.rules[1].symbols, vec![SymbolInternal::NonTerminal(2), SymbolInternal::Terminal(TerminalSymbol::Error)]);
+        assert_eq!(syntax.rules[0].symbols, vec![SymbolInternal::Terminal(TerminalSymbol::Error(())), SymbolInternal::NonTerminal(2), SymbolInternal::Terminal(TerminalSymbol::Symbol(0))]);
+        assert_eq!(syntax.rules[1].symbols, vec![SymbolInternal::NonTerminal(2), SymbolInternal::Terminal(TerminalSymbol::Error(()))]);
         assert_eq!(syntax.rules[2].symbols, vec![SymbolInternal::NonTerminal(2)]);
         assert_eq!(syntax.rules[3].symbols, vec![SymbolInternal::Terminal(TerminalSymbol::Symbol(2))]);
     }

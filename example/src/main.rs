@@ -1,8 +1,8 @@
 use std::time::Instant;
 
-use parser::{enum_index, LR1Parser, Parse, Rule, Syntax};
 use parser::enum_index_derive::*;
 use parser::Symbol::{NonTerminal, Terminal};
+use parser::{enum_index, LR1Parser, Parse, Rule, Syntax};
 use tokenizer::{DFATokenizer, Tokenize};
 
 fn main() {
@@ -35,64 +35,53 @@ fn main() {
         .pattern("\\)", |_, _| Some(Token::CloseBracket))
         .pattern("sqrt", |_, _| Some(Token::Sqrt))
         .pattern(".|\n", |_, _| None)
-        .build().unwrap();
-    let (parser, _) = LR1Parser::new(Syntax::builder()
-        .rule(Rule::new(ParseResult::Sum(None),
-                        &[NonTerminal(ParseResult::Sum(None)), Terminal(Token::Add), NonTerminal(ParseResult::Product(None))],
-                        |list| if let [NonTerminal(ParseResult::Sum(a)), _, NonTerminal(ParseResult::Product(b))] = list {
-                            ParseResult::Sum(a.and_then(|a| b.map(|b| a + b)))
-                        } else { unreachable!() }))
-        .rule(Rule::new(ParseResult::Sum(None),
-                        &[NonTerminal(ParseResult::Sum(None)), Terminal(Token::Sub), NonTerminal(ParseResult::Product(None))],
-                        |list| if let [NonTerminal(ParseResult::Sum(a)), _, NonTerminal(ParseResult::Product(b))] = list {
-                            ParseResult::Sum(a.and_then(|a| b.map(|b| a - b)))
-                        } else { unreachable!() }))
-        .rule(Rule::new(ParseResult::Sum(None),
-                        &[NonTerminal(ParseResult::Product(None))],
-                        |list| if let [NonTerminal(ParseResult::Product(a))] = list {
-                            ParseResult::Sum(*a)
-                        } else { unreachable!() }))
-        .rule(Rule::new(ParseResult::Product(None),
-                        &[NonTerminal(ParseResult::Product(None)), Terminal(Token::Mul), NonTerminal(ParseResult::Block(None))],
-                        |list| if let [NonTerminal(ParseResult::Product(a)), _, NonTerminal(ParseResult::Block(b))] = list {
-                            ParseResult::Product(a.and_then(|a| b.map(|b| a * b)))
-                        } else { unreachable!() }))
-        .rule(Rule::new(ParseResult::Product(None),
-                        &[NonTerminal(ParseResult::Product(None)), Terminal(Token::Div), NonTerminal(ParseResult::Block(None))],
-                        |list| if let [NonTerminal(ParseResult::Product(a)), _, NonTerminal(ParseResult::Block(b))] = list {
-                            ParseResult::Product(a.and_then(|a| b.map(|b| a / b)))
-                        } else { unreachable!() }))
-        .rule(Rule::new(ParseResult::Product(None),
-                        &[NonTerminal(ParseResult::Block(None))],
-                        |list| if let [NonTerminal(ParseResult::Block(a))] = list {
-                            ParseResult::Product(*a)
-                        } else { unreachable!() }))
-        .rule(Rule::new(ParseResult::Block(None),
-                        &[Terminal(Token::Number(0.0))],
-                        |list| if let [Terminal(Token::Number(n))] = list {
-                            ParseResult::Block(Some(*n))
-                        } else { unreachable!() }))
-        .rule(Rule::new(ParseResult::Block(None),
-                        &[Terminal(Token::Add), Terminal(Token::Number(0.0))],
-                        |list| if let [_, Terminal(Token::Number(n))] = list {
-                            ParseResult::Block(Some(*n))
-                        } else { unreachable!() }))
-        .rule(Rule::new(ParseResult::Block(None),
-                        &[Terminal(Token::Sub), Terminal(Token::Number(0.0))],
-                        |list| if let [_, Terminal(Token::Number(n))] = list {
-                            ParseResult::Block(Some(-*n))
-                        } else { unreachable!() }))
-        .rule(Rule::new(ParseResult::Block(None),
-                        &[Terminal(Token::Bracket), NonTerminal(ParseResult::Sum(None)), Terminal(Token::CloseBracket)],
-                        |list| if let [_, NonTerminal(ParseResult::Sum(n)), _] = list {
-                            ParseResult::Block(*n)
-                        } else { unreachable!() }))
-        .rule(Rule::new(ParseResult::Block(None),
-                        &[Terminal(Token::Sqrt), NonTerminal(ParseResult::Block(None))],
-                        |list| if let [_, NonTerminal(ParseResult::Block(n))] = list {
-                            ParseResult::Block(n.map(f64::sqrt))
-                        } else { unreachable!() }))
-        .build(ParseResult::Sum(None)));
+        .build()
+        .unwrap();
+    let (parser, _) = LR1Parser::<_, _>::new(
+        Syntax::builder()
+            .rule(Rule::new(ParseResult::Sum(None), &[NonTerminal(ParseResult::Sum(None)), Terminal(Token::Add), NonTerminal(ParseResult::Product(None))], |list| {
+                if let [NonTerminal(ParseResult::Sum(a)), _, NonTerminal(ParseResult::Product(b))] = list {
+                    Ok(ParseResult::Sum(a.and_then(|a| b.map(|b| a + b))))
+                } else {
+                    unreachable!()
+                }
+            }))
+            .rule(Rule::new(ParseResult::Sum(None), &[NonTerminal(ParseResult::Sum(None)), Terminal(Token::Sub), NonTerminal(ParseResult::Product(None))], |list| {
+                if let [NonTerminal(ParseResult::Sum(a)), _, NonTerminal(ParseResult::Product(b))] = list {
+                    Ok(ParseResult::Sum(a.and_then(|a| b.map(|b| a - b))))
+                } else {
+                    unreachable!()
+                }
+            }))
+            .rule(Rule::new(ParseResult::Sum(None), &[NonTerminal(ParseResult::Product(None))], |list| if let [NonTerminal(ParseResult::Product(a))] = list { Ok(ParseResult::Sum(*a)) } else { unreachable!() }))
+            .rule(Rule::new(ParseResult::Product(None), &[NonTerminal(ParseResult::Product(None)), Terminal(Token::Mul), NonTerminal(ParseResult::Block(None))], |list| {
+                if let [NonTerminal(ParseResult::Product(a)), _, NonTerminal(ParseResult::Block(b))] = list {
+                    Ok(ParseResult::Product(a.and_then(|a| b.map(|b| a * b))))
+                } else {
+                    unreachable!()
+                }
+            }))
+            .rule(Rule::new(ParseResult::Product(None), &[NonTerminal(ParseResult::Product(None)), Terminal(Token::Div), NonTerminal(ParseResult::Block(None))], |list| {
+                if let [NonTerminal(ParseResult::Product(a)), _, NonTerminal(ParseResult::Block(b))] = list {
+                    Ok(ParseResult::Product(a.and_then(|a| b.map(|b| a / b))))
+                } else {
+                    unreachable!()
+                }
+            }))
+            .rule(Rule::new(ParseResult::Product(None), &[NonTerminal(ParseResult::Block(None))], |list| if let [NonTerminal(ParseResult::Block(a))] = list { Ok(ParseResult::Product(*a)) } else { unreachable!() }))
+            .rule(Rule::new(ParseResult::Block(None), &[Terminal(Token::Number(0.0))], |list| if let [Terminal(Token::Number(n))] = list { Ok(ParseResult::Block(Some(*n))) } else { unreachable!() }))
+            .rule(Rule::new(ParseResult::Block(None), &[Terminal(Token::Add), Terminal(Token::Number(0.0))], |list| if let [_, Terminal(Token::Number(n))] = list { Ok(ParseResult::Block(Some(*n))) } else { unreachable!() }))
+            .rule(Rule::new(ParseResult::Block(None), &[Terminal(Token::Sub), Terminal(Token::Number(0.0))], |list| if let [_, Terminal(Token::Number(n))] = list { Ok(ParseResult::Block(Some(-*n))) } else { unreachable!() }))
+            .rule(Rule::new(ParseResult::Block(None), &[Terminal(Token::Bracket), NonTerminal(ParseResult::Sum(None)), Terminal(Token::CloseBracket)], |list| {
+                if let [_, NonTerminal(ParseResult::Sum(n)), _] = list {
+                    Ok(ParseResult::Block(*n))
+                } else {
+                    unreachable!()
+                }
+            }))
+            .rule(Rule::new(ParseResult::Block(None), &[Terminal(Token::Sqrt), NonTerminal(ParseResult::Block(None))], |list| if let [_, NonTerminal(ParseResult::Block(n))] = list { Ok(ParseResult::Block(n.map(f64::sqrt))) } else { unreachable!() }))
+            .build(ParseResult::Sum(None)),
+    );
     println!("construct tokenizer and parser by {}ms", start.elapsed().as_millis());
     loop {
         let mut input = String::new();
@@ -105,7 +94,7 @@ fn main() {
             Err(e) => {
                 println!("{:?}", e);
             }
-            _ => unreachable!()
+            _ => unreachable!(),
         }
     }
 }
