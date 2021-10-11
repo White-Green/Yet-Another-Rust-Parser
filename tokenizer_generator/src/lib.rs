@@ -14,7 +14,7 @@ mod kw {
 struct TokenizerRule {
     rule: LitStr,
     _sep: Token![:],
-    paren: token::Paren,
+    _paren: token::Paren,
     generator: syn::ExprClosure,
 }
 
@@ -24,7 +24,7 @@ impl Parse for TokenizerRule {
         Ok(TokenizerRule {
             rule: input.parse()?,
             _sep: input.parse()?,
-            paren: parenthesized!(closure in input),
+            _paren: parenthesized!(closure in input),
             generator: closure.parse()?,
         })
     }
@@ -67,7 +67,6 @@ pub fn tokenizer(input: TokenStream) -> TokenStream {
         eprintln!("warnings in construct tokenizer {:?}", warnings);
     }
     let goto_constructor = {
-        let goto_length = goto.len();
         let inner = goto.into_iter().map(|map| {
             let (key, value): (Vec<_>, Vec<_>) = map.into_iter().unzip();
             let (start, end): (Vec<_>, Vec<_>) = key.into_iter().map(|CharRange { range: Range { start, end } }| (start, end)).unzip();

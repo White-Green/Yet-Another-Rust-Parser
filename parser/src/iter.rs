@@ -38,8 +38,8 @@ pub trait Parse<N, E>: IntoIterator {
 }
 
 impl<I: IntoIterator, N, E> Parse<N, E> for I
-where
-    I::Item: EnumIndex,
+    where
+        I::Item: EnumIndex,
 {
     fn parse(self, parser: &LR1Parser<N, Self::Item, E>) -> Result<N, ParseError<E>> {
         let mut iter = self.into_iter();
@@ -119,7 +119,7 @@ where
                     }
                 }
                 None => {
-                    let is_eoi = if let TerminalSymbol::EOI = symbol { true } else { false };
+                    let is_eoi = matches!(symbol, TerminalSymbol::EOI);
                     let mut backtracked = false;
                     let tail = *symbol_index;
                     let mut head = tail;
