@@ -10,10 +10,10 @@ use crate::CharRange;
 pub(crate) mod iter;
 
 pub struct DFATokenizer<E, T> {
-    goto: Vec<BTreeMap<CharRange, usize>>,
-    begin: usize,
-    end: HashMap<usize, usize>,
-    enum_maker: Vec<Box<dyn Fn(&str, Vec<T>) -> E>>,
+    pub goto: Vec<BTreeMap<CharRange, usize>>,
+    pub begin: usize,
+    pub end: HashMap<usize, usize>,
+    pub enum_maker: Vec<Box<dyn Fn(&str, Vec<T>) -> E>>,
 }
 
 impl<E, T> Tokenizer for DFATokenizer<E, T> {

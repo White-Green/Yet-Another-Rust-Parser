@@ -12,8 +12,8 @@ mod nfa;
 mod tokenizer;
 
 #[derive(Eq, Hash, Clone)]
-struct CharRange {
-    range: Range<u32>,
+pub struct CharRange {
+    pub range: Range<u32>,
 }
 
 impl Debug for CharRange {
