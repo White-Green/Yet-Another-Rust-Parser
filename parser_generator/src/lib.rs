@@ -1,13 +1,12 @@
 use proc_macro::TokenStream;
 use std::collections::HashMap;
-use std::str::FromStr;
 use std::time::Instant;
 
 use proc_macro2::{Delimiter, Group};
 use quote::{quote, ToTokens};
 use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
-use syn::{braced, bracketed, parenthesized, parse_macro_input, token, ExprClosure, ExprTuple, FieldValue, Ident, Token, Type};
+use syn::{braced, bracketed, parenthesized, parse_macro_input, token, Expr, ExprTuple, FieldValue, Ident, LitStr, Pat, Path, Token, Type, Visibility};
 
 use parser::enum_index::EnumIndex;
 use parser::{Action, LR1Parser, Rule, Symbol, Syntax, TerminalSymbol};
@@ -15,7 +14,91 @@ use parser::{Action, LR1Parser, Rule, Symbol, Syntax, TerminalSymbol};
 mod kw {
     syn::custom_keyword!(token);
     syn::custom_keyword!(symbol);
+    syn::custom_keyword!(errortype);
+    syn::custom_keyword!(start);
     syn::custom_keyword!(ERROR);
+    syn::custom_keyword!(LR1Parser);
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+enum TokenKey {
+    Named(String),
+    Raw(String),
+}
+
+impl Parse for TokenKey {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        if input.peek(LitStr) {
+            let s: LitStr = input.parse()?;
+            Ok(TokenKey::Raw(s.value()))
+        } else {
+            let s: Ident = input.parse()?;
+            Ok(TokenKey::Named(s.to_string()))
+        }
+    }
+}
+
+struct TokenItem {
+    key: TokenKey,
+    _eq: Token![=],
+    value: Expr,
+}
+
+impl Parse for TokenItem {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        Ok(TokenItem { key: input.parse()?, _eq: input.parse()?, value: input.parse()? })
+    }
+}
+
+struct TokenList {
+    _token: kw::token,
+    name: Path,
+    _brace: token::Brace,
+    items: Punctuated<TokenItem, Token![,]>,
+}
+
+impl Parse for TokenList {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let items;
+        Ok(TokenList {
+            _token: input.parse()?,
+            name: input.parse()?,
+            _brace: braced!(items in input),
+            items: items.parse_terminated(TokenItem::parse)?,
+        })
+    }
+}
+
+struct SymbolItem {
+    key: String,
+    _eq: Token![=],
+    value: Expr,
+}
+
+impl Parse for SymbolItem {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let key: Ident = input.parse()?;
+        Ok(SymbolItem { key: key.to_string(), _eq: input.parse()?, value: input.parse()? })
+    }
+}
+
+struct SymbolList {
+    _symbol: kw::symbol,
+    name: Path,
+    _brace: token::Brace,
+    items: Punctuated<SymbolItem, Token![,]>,
+}
+
+impl Parse for SymbolList {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let items;
+        Ok(SymbolList {
+            _symbol: input.parse()?,
+            name: input.parse()?,
+            _brace: braced!(items in input),
+            items: items.parse_terminated(SymbolItem::parse)?,
+        })
+    }
 }
 
 enum EnumValue {
@@ -68,27 +151,24 @@ impl ToTokens for EnumItem {
     }
 }
 
-struct ItemsList<Prefix> {
-    _prefix: Prefix,
-    token_enum_name: Ident,
-    _brace: token::Brace,
-    items: Punctuated<EnumItem, Token![,]>,
+enum BNFTerminalSymbol {
+    Named { _bracket: token::Bracket, name: Ident },
+    Raw(LitStr),
 }
 
-impl<P: Parse> Parse for ItemsList<P> {
+impl Parse for BNFTerminalSymbol {
     fn parse(input: ParseStream) -> syn::Result<Self> {
-        let content;
-        Ok(ItemsList {
-            _prefix: input.parse()?,
-            token_enum_name: input.parse()?,
-            _brace: braced!(content in input),
-            items: content.parse_terminated(EnumItem::parse)?,
-        })
+        if input.peek(token::Bracket) {
+            let name;
+            Ok(BNFTerminalSymbol::Named { _bracket: bracketed!(name in input), name: name.parse()? })
+        } else {
+            Ok(BNFTerminalSymbol::Raw(input.parse()?))
+        }
     }
 }
 
 enum BNFSymbol {
-    Terminal { _bracket: token::Bracket, name: Ident },
+    Terminal(BNFTerminalSymbol),
     NonTerminal { _open: Token![<], name: Ident, _close: Token![>] },
     Error(kw::ERROR),
 }
@@ -100,8 +180,7 @@ impl Parse for BNFSymbol {
         } else if input.peek(kw::ERROR) {
             Ok(BNFSymbol::Error(input.parse()?))
         } else {
-            let content;
-            Ok(BNFSymbol::Terminal { _bracket: bracketed!(content in input), name: content.parse()? })
+            Ok(BNFSymbol::Terminal(input.parse()?))
         }
     }
 }
@@ -114,60 +193,106 @@ impl Parse for NoneToken {
     }
 }
 
+enum BNFRuleKey {
+    Named { _open: Token![<], name: Ident, _close: Token![>], _eq1: Token![::], _eq2: Token![=] },
+    Follow(Token![|]),
+}
+
+impl Parse for BNFRuleKey {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        if input.peek(Token![<]) {
+            Ok(BNFRuleKey::Named {
+                _open: input.parse()?,
+                name: input.parse()?,
+                _close: input.parse()?,
+                _eq1: input.parse()?,
+                _eq2: input.parse()?,
+            })
+        } else {
+            Ok(BNFRuleKey::Follow(input.parse()?))
+        }
+    }
+}
+
 struct BNFRule {
-    _open: Token![<],
-    non_terminal: Ident,
-    _close: Token![>],
-    _eq1: Token![::],
-    _eq2: Token![=],
-    _bracket: token::Paren,
-    rule: Punctuated<BNFSymbol, NoneToken>,
-    _bracket2: token::Paren,
-    generator: ExprClosure,
+    key: BNFRuleKey,
+    rule: Vec<BNFSymbol>,
+    _sep: Token![:],
+    pattern: Pat,
+    _arrow: Token![=>],
+    generator: Expr,
+    _end: Token![;],
 }
 
 impl Parse for BNFRule {
     fn parse(input: ParseStream) -> syn::Result<Self> {
-        let content;
-        let content2;
         Ok(BNFRule {
-            _open: input.parse()?,
-            non_terminal: input.parse()?,
-            _close: input.parse()?,
-            _eq1: input.parse()?,
-            _eq2: input.parse()?,
-            _bracket: parenthesized!(content in input),
-            rule: content.parse_terminated(BNFSymbol::parse)?,
-            _bracket2: parenthesized!(content2 in input),
-            generator: content2.parse()?,
+            key: input.parse()?,
+            rule: {
+                let mut vec = Vec::new();
+                while !input.peek(Token![:]) {
+                    vec.push(input.parse()?);
+                }
+                vec
+            },
+            _sep: input.parse()?,
+            pattern: input.parse()?,
+            _arrow: input.parse()?,
+            generator: input.parse()?,
+            _end: input.parse()?,
         })
     }
 }
 
 struct ParserGeneratorInput {
-    tokens: ItemsList<kw::token>,
-    symbols: ItemsList<kw::symbol>,
-    _bracket: token::Paren,
+    visibility: Visibility,
+    _fn: Token![fn],
+    function_name: Ident,
+    _paren: token::Paren,
+    _arrow: Token![->],
+    _marker: kw::LR1Parser,
+    _brace: token::Brace,
+    tokens: TokenList,
+    symbols: SymbolList,
+    _error: kw::errortype,
     error: Type,
+    _end1: Token![;],
+    _start: kw::start,
     start: Ident,
+    _end2: Token![;],
     rules: Vec<BNFRule>,
 }
 
 impl Parse for ParserGeneratorInput {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let mut rules = Vec::new();
-        let content;
+        let items;
+        let ignore;
         Ok(ParserGeneratorInput {
-            tokens: input.parse()?,
-            symbols: input.parse()?,
-            start: input.parse()?,
-            _bracket: parenthesized!(content in input),
-            error: content.parse()?,
+            visibility: input.parse()?,
+            _fn: input.parse()?,
+            function_name: input.parse()?,
+            _paren: {
+                let p = parenthesized!(ignore in input);
+                assert!(ignore.is_empty(), "argument count of parser function should be zero");
+                p
+            },
+            _arrow: input.parse()?,
+            _marker: input.parse()?,
+            _brace: braced!(items in input),
+            tokens: items.parse()?,
+            symbols: items.parse()?,
+            _error: items.parse()?,
+            error: items.parse()?,
+            _end1: items.parse()?,
+            _start: items.parse()?,
+            start: items.parse()?,
+            _end2: items.parse()?,
             rules: loop {
-                if input.is_empty() {
+                if items.is_empty() {
                     break rules;
                 }
-                rules.push(input.parse()?);
+                rules.push(items.parse()?);
             },
         })
     }
@@ -184,23 +309,33 @@ impl EnumIndex for AnonymousSymbol {
 
 #[proc_macro]
 pub fn parser(input: TokenStream) -> TokenStream {
-    let ParserGeneratorInput { tokens, symbols, error, start, rules, .. } = parse_macro_input!(input as ParserGeneratorInput);
-    let token_type_name = tokens.token_enum_name;
-    let token_name_map = tokens.items.iter().enumerate().map(|(i, EnumItem { name, .. })| (name.to_string(), i)).collect::<HashMap<_, _>>();
-    let symbol_type_name = symbols.token_enum_name;
-    let symbol_name_map = symbols.items.iter().enumerate().map(|(i, EnumItem { name, .. })| (name.to_string(), i)).collect::<HashMap<_, _>>();
+    let ParserGeneratorInput { visibility, function_name, tokens, symbols, error, start, rules, .. } = parse_macro_input!(input as ParserGeneratorInput);
+    let token_type_name = tokens.name;
+    let token_name_map = tokens.items.iter().enumerate().map(|(i, TokenItem { key, .. })| (key.clone(), i)).collect::<HashMap<_, _>>();
+    let symbol_type_name = symbols.name;
+    let symbol_name_map = symbols.items.iter().enumerate().map(|(i, SymbolItem { key, .. })| (key.clone(), i)).collect::<HashMap<_, _>>();
     let mut syntax = Syntax::<AnonymousSymbol, AnonymousSymbol>::builder();
-    for BNFRule { non_terminal, rule, .. } in &rules {
-        let start = if let Some(start) = symbol_name_map.get(&non_terminal.to_string()) {
-            *start
-        } else {
-            return TokenStream::from_str("compile_error!()").unwrap();
+    let mut above_rule_key = None;
+    let mut keys = Vec::with_capacity(rules.len());
+    for BNFRule { key, rule, .. } in &rules {
+        let start = match key {
+            BNFRuleKey::Named { name, .. } => {
+                if let Some(start) = symbol_name_map.get(&name.to_string()) {
+                    *start
+                } else {
+                    panic!("unknown symbol key {}", name.to_string());
+                }
+            }
+            BNFRuleKey::Follow(_) => above_rule_key.expect("above rule is not found"),
         };
+        above_rule_key = Some(start);
+        keys.push(start);
         let items = rule
             .iter()
             .map(|symbol| match symbol {
-                BNFSymbol::Terminal { name, .. } => Symbol::Terminal(*token_name_map.get(&name.to_string()).expect("token name is not found")),
-                BNFSymbol::NonTerminal { name, .. } => Symbol::NonTerminal(*symbol_name_map.get(&name.to_string()).expect("symbol name is not found")),
+                BNFSymbol::Terminal(BNFTerminalSymbol::Named { name, .. }) => Symbol::Terminal(*token_name_map.get(&TokenKey::Named(name.to_string())).unwrap_or_else(|| panic!("token named {:?} is not found", name.to_string()))),
+                BNFSymbol::Terminal(BNFTerminalSymbol::Raw(name)) => Symbol::Terminal(*token_name_map.get(&TokenKey::Raw(name.value())).unwrap_or_else(|| panic!("token named {:?} is not found", name.value()))),
+                BNFSymbol::NonTerminal { name, .. } => Symbol::NonTerminal(*symbol_name_map.get(&name.to_string()).unwrap_or_else(|| panic!("symbol named {:?} is not found", name.to_string()))),
                 BNFSymbol::Error(_) => Symbol::Error(()),
             })
             .collect::<Vec<_>>();
@@ -295,12 +430,26 @@ pub fn parser(input: TokenStream) -> TokenStream {
             }
         }
     };
-    let rules_constructor = rules.into_iter().map(|rule| {
-        let generator = rule.generator;
-        let start = *symbol_name_map.get(&rule.non_terminal.to_string()).expect("");
+    let rules_constructor = rules.into_iter().enumerate().map(|(i, rule)| {
+        let generator = {
+            let pattern = rule.pattern;
+            let generator = rule.generator;
+            quote! {
+                |list| match list {
+                    #pattern => #generator,
+                    _ => panic!("entered unreachable code in rule {}. please check definition of parser", #i),
+                }
+            }
+        };
+
+        let start = keys[i];
         let items = rule.rule.iter().map(|item| match item {
-            BNFSymbol::Terminal { name, .. } => {
-                let token = *token_name_map.get(&name.to_string()).expect("");
+            BNFSymbol::Terminal(BNFTerminalSymbol::Named { name, .. }) => {
+                let token = *token_name_map.get(&TokenKey::Named(name.to_string())).expect("");
+                quote! { parser::Symbol::<usize, usize, ()>::Terminal(tokens[#token]) }
+            }
+            BNFSymbol::Terminal(BNFTerminalSymbol::Raw(name)) => {
+                let token = *token_name_map.get(&TokenKey::Raw(name.value())).expect("");
                 quote! { parser::Symbol::<usize, usize, ()>::Terminal(tokens[#token]) }
             }
             BNFSymbol::NonTerminal { name, .. } => {
@@ -311,10 +460,10 @@ pub fn parser(input: TokenStream) -> TokenStream {
         });
         quote! { parser::Rule::<#symbol_type_name, #token_type_name, #error>::new_raw(symbols[#start], &[#(#items),*], #generator) }
     });
-    let tokens = tokens.items.iter(); //.map(|token| dbg!(quote! { #token_type_name::#token }));
-    let symbols = symbols.items.iter(); //.map(|symbol|quote!{ #symbol_type_name::#symbol });
+    let tokens = tokens.items.iter().map(|TokenItem { value, .. }| value); //.map(|token| dbg!(quote! { #token_type_name::#token }));
+    let symbols = symbols.items.iter().map(|SymbolItem { value, .. }| value); //.map(|symbol|quote!{ #symbol_type_name::#symbol });
     let result = quote! {
-        pub fn get_parser() -> parser::LR1Parser<#symbol_type_name, #token_type_name, #error>{
+        #visibility fn #function_name() -> parser::LR1Parser<#symbol_type_name, #token_type_name, #error>{
             let tokens = [#(parser::enum_index::EnumIndex::enum_index(&(#token_type_name::#tokens))),*];
             let symbols = [#(parser::enum_index::EnumIndex::enum_index(&(#symbol_type_name::#symbols))),*];
             let action_table: std::collections::HashMap<usize, std::collections::HashMap<parser::TerminalSymbol<usize, ()>, parser::Action<usize, usize>>> = #action_table_constructor;

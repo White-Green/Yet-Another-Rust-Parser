@@ -4,6 +4,7 @@ use parser::enum_index_derive::EnumIndex;
 use parser::Symbol;
 use parser::{enum_index, Parse};
 use parser_generator::parser;
+use std::mem;
 
 #[derive(Debug, PartialEq, EnumIndex, Clone)]
 pub enum Terminal {
@@ -20,51 +21,37 @@ pub enum NonTerminal {
 }
 
 parser! {
-    token Terminal{
-        Number(0,),
-        Plus,
-        Star,
+    fn create_parser() -> LR1Parser {
+        token Terminal{
+            Number = Number(0),
+            "+" = Plus,
+            "*" = Star,
+        }
+        symbol NonTerminal{
+            E = E(Vec::new()),
+            T = T(Vec::new()),
+            F = F(Terminal::Plus),
+        }
+        errortype Box<dyn Error + Send + Sync + 'static>;
+        start E;
+        <E>::=<E> "+" <T>: [Symbol::NonTerminal(NonTerminal::E(vec)), _, Symbol::NonTerminal(NonTerminal::T(v))] => {
+                            vec.push(NonTerminal::T(mem::take(v)));
+                            Ok(NonTerminal::E(mem::take(vec)))
+                        };
+        <E>::=<T>: [Symbol::NonTerminal(NonTerminal::T(vec))] => Ok(NonTerminal::E(vec![NonTerminal::T(std::mem::take(vec))]));
+        <T>::=<T> "*" <F>: [Symbol::NonTerminal(NonTerminal::T(vec)), _, Symbol::NonTerminal(f)] => {
+                            vec.push(std::mem::replace(f, NonTerminal::F(Terminal::Number(0))));
+                            Ok(NonTerminal::T(mem::take(vec)))
+                        };
+        <T>::=<F>: [Symbol::NonTerminal(f)] => Ok(NonTerminal::T(vec![std::mem::replace(f, NonTerminal::F(Terminal::Number(0)))]));
+        <F>::=[Number]: [Symbol::Terminal(n)] => Ok(NonTerminal::F(n.clone()));
+        <F>::=ERROR: [Symbol::Error(list)] => Err(format!("{:?}", list).into());
     }
-    symbol NonTerminal{
-        E(Vec::new(),),
-        T(Vec::new(),),
-        F(Terminal::Plus,),
-    }
-    E
-    (Box<dyn Error + Send + Sync + 'static>)
-    <E>::=(<E>[Plus]<T>)                  (|list|
-                    if let [Symbol::NonTerminal(NonTerminal::E(vec)), _, Symbol::NonTerminal(NonTerminal::T(v))] = *list {
-                        let mut vec = std::mem::take(vec);
-                        vec.push(NonTerminal::T(std::mem::take(v)));
-                        Ok(NonTerminal::E(vec))
-                    } else { unreachable!() })
-    <E>::=(<T>)                         (|list|
-                    if let [Symbol::NonTerminal(NonTerminal::T(vec))] = *list {
-                        Ok(NonTerminal::E(vec![NonTerminal::T(std::mem::take(vec))]))
-                    } else { unreachable!() })
-    <T>::=(<T>[Star]<F>)                  (|list|
-                    if let [Symbol::NonTerminal(NonTerminal::T(vec)), _, Symbol::NonTerminal(f)] = &mut *list {
-                        let mut vec = std::mem::take(vec);
-                        vec.push(std::mem::replace(f, NonTerminal::F(Terminal::Number(0))));
-                        Ok(NonTerminal::T(vec))
-                    } else { unreachable!() })
-    <T>::=(<F>)                         (|list|
-                    if let [Symbol::NonTerminal(f)] = list {
-                        Ok(NonTerminal::T(vec![std::mem::replace(f, NonTerminal::F(Terminal::Number(0)))]))
-                    } else { unreachable!() })
-    <F>::=([Number])                         (|list|
-                    if let [Symbol::Terminal(n)] = list {
-                        Ok(NonTerminal::F(n.clone()))
-                    } else { unreachable!() })
-    <F>::=(ERROR)                         (|list|
-                    if let [Symbol::Error(list)] = list {
-                        Err(format!("{:?}", list).into())
-                    } else { unreachable!() })
 }
 
 #[test]
 fn test_parser_generator() {
-    let parser = get_parser();
+    let parser = create_parser();
     use NonTerminal::*;
     use Terminal::*;
     assert_eq!(vec![Number(1), Plus, Number(2), Star, Number(3), Plus, Number(4)].into_iter().parse(&parser).unwrap(), E(vec![T(vec![F(Number(1))]), T(vec![F(Number(2)), F(Number(3))]), T(vec![F(Number(4))])]));
