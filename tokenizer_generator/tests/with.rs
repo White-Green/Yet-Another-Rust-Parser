@@ -11,9 +11,9 @@ tokenizer_generator::tokenizer! {
     fn create_tokenizer() -> DFATokenizer {
         character (char, usize);
         token Token;
-        "[a-zA-Z_][a-zA-Z0-9_]*": (|s, a: Vec<(char, _)>| Token::A(s.to_string(), a[0].1, a.len()));
-        "0([xX][0-9a-fA-F]+|[dD][0-9]+|[oO][0-7]+|[bB][01]+)|[1-9][0-9]*|0": (|s, a| Token::B(s.to_string(), a[0].1, a.len()));
-        ".|\n": (|s, a| Token::C(s.to_string(), a[0].1, a.len()));
+        "[a-zA-Z_][a-zA-Z0-9_]*": |s, a: Vec<(char, _)>| Token::A(s.to_string(), a[0].1, a.len());
+        "0([xX][0-9a-fA-F]+|[dD][0-9]+|[oO][0-7]+|[bB][01]+)|[1-9][0-9]*|0": |s, a| Token::B(s.to_string(), a[0].1, a.len());
+        ".|\n": |s, a| Token::C(s.to_string(), a[0].1, a.len());
     }
 }
 

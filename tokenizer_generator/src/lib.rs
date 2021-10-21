@@ -1,6 +1,6 @@
 use proc_macro::TokenStream;
 use std::ops::Range;
-use syn::{Token, braced, Ident, token, Type, LitStr, parenthesized, parse_macro_input, ExprClosure, Visibility};
+use syn::{Token, braced, Ident, token, Type, LitStr, parenthesized, parse_macro_input, Visibility, Expr};
 use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
 use tokenizer::{CharRange, DFATokenizer};
@@ -15,18 +15,15 @@ mod kw {
 struct TokenizerRule {
     rule: LitStr,
     _sep: Token![:],
-    _paren: token::Paren,
-    generator: syn::ExprClosure,
+    generator: Expr,
 }
 
 impl Parse for TokenizerRule {
     fn parse(input: ParseStream) -> syn::Result<Self> {
-        let closure;
         Ok(TokenizerRule {
             rule: input.parse()?,
             _sep: input.parse()?,
-            _paren: parenthesized!(closure in input),
-            generator: closure.parse()?,
+            generator: input.parse()?,
         })
     }
 }
@@ -78,7 +75,7 @@ impl Parse for TokenizerGeneratorInput {
 #[proc_macro]
 pub fn tokenizer(input: TokenStream) -> TokenStream {
     let TokenizerGeneratorInput { visibility, function_name, character_type, token_type, rules, .. } = parse_macro_input!(input as TokenizerGeneratorInput);
-    let (rules, enum_maker): (Vec<LitStr>, Vec<ExprClosure>) = rules.into_iter().map(|TokenizerRule { rule, generator, .. }| (rule, generator)).unzip();
+    let (rules, enum_maker): (Vec<LitStr>, Vec<Expr>) = rules.into_iter().map(|TokenizerRule { rule, generator, .. }| (rule, generator)).unzip();
     let mut builder = DFATokenizer::<(), char>::builder();
     for rule in &rules {
         builder = builder.pattern(&rule.value(), |_, _| unreachable!());
