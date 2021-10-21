@@ -1,6 +1,6 @@
 use proc_macro::TokenStream;
 use std::ops::Range;
-use syn::{Token, token, Type, LitStr, parenthesized, parse_macro_input, ExprClosure};
+use syn::{Token, braced, Ident, token, Type, LitStr, parenthesized, parse_macro_input, ExprClosure, Visibility};
 use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
 use tokenizer::{CharRange, DFATokenizer};
@@ -9,6 +9,7 @@ use quote::quote;
 mod kw {
     syn::custom_keyword!(character);
     syn::custom_keyword!(token);
+    syn::custom_keyword!(DFATokenizer);
 }
 
 struct TokenizerRule {
@@ -31,6 +32,13 @@ impl Parse for TokenizerRule {
 }
 
 struct TokenizerGeneratorInput {
+    visibility: Visibility,
+    _fn: Token![fn],
+    function_name: Ident,
+    _paren: token::Paren,
+    _arrow: Token![->],
+    _marker: kw::DFATokenizer,
+    _brace: token::Brace,
     _character: kw::character,
     character_type: Type,
     _sep0: Token![;],
@@ -42,21 +50,34 @@ struct TokenizerGeneratorInput {
 
 impl Parse for TokenizerGeneratorInput {
     fn parse(input: ParseStream) -> syn::Result<Self> {
+        let ignore;
+        let items;
         Ok(TokenizerGeneratorInput {
-            _character: input.parse()?,
-            character_type: input.parse()?,
-            _sep0: input.parse()?,
-            _token: input.parse()?,
-            token_type: input.parse()?,
-            _sep1: input.parse()?,
-            rules: input.parse_terminated(TokenizerRule::parse)?,
+            visibility: input.parse()?,
+            _fn: input.parse()?,
+            function_name: input.parse()?,
+            _paren: {
+                let p = parenthesized!(ignore in input);
+                assert!(ignore.is_empty(), "argument count of parser function should be zero");
+                p
+            },
+            _arrow: input.parse()?,
+            _marker: input.parse()?,
+            _brace: braced!(items in input),
+            _character: items.parse()?,
+            character_type: items.parse()?,
+            _sep0: items.parse()?,
+            _token: items.parse()?,
+            token_type: items.parse()?,
+            _sep1: items.parse()?,
+            rules: items.parse_terminated(TokenizerRule::parse)?,
         })
     }
 }
 
 #[proc_macro]
 pub fn tokenizer(input: TokenStream) -> TokenStream {
-    let TokenizerGeneratorInput { character_type, token_type, rules, .. } = parse_macro_input!(input as TokenizerGeneratorInput);
+    let TokenizerGeneratorInput { visibility, function_name, character_type, token_type, rules, .. } = parse_macro_input!(input as TokenizerGeneratorInput);
     let (rules, enum_maker): (Vec<LitStr>, Vec<ExprClosure>) = rules.into_iter().map(|TokenizerRule { rule, generator, .. }| (rule, generator)).unzip();
     let mut builder = DFATokenizer::<(), char>::builder();
     for rule in &rules {
@@ -107,7 +128,7 @@ pub fn tokenizer(input: TokenStream) -> TokenStream {
     };
 
     let result = quote! {
-        pub fn get_tokenizer() -> tokenizer::DFATokenizer<#token_type, #character_type> {
+        #visibility fn #function_name() -> tokenizer::DFATokenizer<#token_type, #character_type> {
             let goto = #goto_constructor;
             let end = #end_constructor;
             let enum_maker = #enum_maker_constructor;

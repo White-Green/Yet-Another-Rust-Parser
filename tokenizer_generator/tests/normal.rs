@@ -8,11 +8,13 @@ pub enum Token {
 use Token::*;
 use tokenizer::Tokenize;
 tokenizer_generator::tokenizer! {
-    character char;
-    token Token;
-    "[a-zA-Z_][a-zA-Z0-9_]*": (|s, _| Token::A(s.to_string()));
-    "0([xX][0-9a-fA-F]+|[dD][0-9]+|[oO][0-7]+|[bB][01]+)|[1-9][0-9]*|0": (|s, _| Token::B(s.to_string()));
-    ".|\n": (|s, _| Token::C(s.to_string()));
+    fn get_tokenizer() -> DFATokenizer {
+        character char;
+        token Token;
+        "[a-zA-Z_][a-zA-Z0-9_]*": (|s, _| Token::A(s.to_string()));
+        "0([xX][0-9a-fA-F]+|[dD][0-9]+|[oO][0-7]+|[bB][01]+)|[1-9][0-9]*|0": (|s, _| Token::B(s.to_string()));
+        ".|\n": (|s, _| Token::C(s.to_string()));
+    }
 }
 
 #[test]
