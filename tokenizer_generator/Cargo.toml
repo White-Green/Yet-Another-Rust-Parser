@@ -2,7 +2,7 @@
 name = "tokenizer_generator"
 version = "0.1.0"
 authors = ["White-Green <43771790+White-Green@users.noreply.github.com>"]
-edition = "2018"
+edition = "2021"
 
 [lib]
 proc-macro = true

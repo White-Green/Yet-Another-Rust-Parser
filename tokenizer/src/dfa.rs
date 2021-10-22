@@ -270,7 +270,6 @@ pub(crate) fn tokenizer_dfa_to_index(dfa: &TokenizerDFA) -> (Vec<BTreeMap<CharRa
 #[cfg(test)]
 #[allow(dead_code)]
 pub(crate) fn print_tokenizer_dfa_index(index: &(Vec<BTreeMap<CharRange, usize>>, usize, BTreeMap<usize, usize>)) {
-    use std::convert::TryFrom;
     println!("digraph Automaton{{");
     for i in 0..index.0.len() {
         let option = if i == index.1 { "color=red, " } else { "" };
