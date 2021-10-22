@@ -353,11 +353,11 @@ pub fn parser(input: TokenStream) -> TokenStream {
         let goto_table_constructor = goto_table.into_iter().map(|(key, value)| {
             let value_constructor = value.into_iter().map(|(key, value)| quote! { (symbols[#key], #value) });
             quote! {
-                (#key, std::collections::HashMap::<usize, usize>::from([#(#value_constructor),*]))
+                (#key, std::collections::HashMap::<usize, usize>::from_iter(vec![#(#value_constructor),*]))
             }
         });
         quote! {
-            std::collections::HashMap::<usize, std::collections::HashMap<usize, usize>>::from([#(#goto_table_constructor),*])
+            std::collections::HashMap::<usize, std::collections::HashMap<usize, usize>>::from_iter(vec![#(#goto_table_constructor),*])
         }
     };
     let action_table_constructor = {
@@ -379,22 +379,22 @@ pub fn parser(input: TokenStream) -> TokenStream {
             });
 
             quote! {
-                (#key, std::collections::HashMap::<parser::TerminalSymbol<usize, ()>, parser::Action<usize, usize>>::from([#(#key_value_list),*]))
+                (#key, std::collections::HashMap::<parser::TerminalSymbol<usize, ()>, parser::Action<usize, usize>>::from_iter(vec![#(#key_value_list),*]))
             }
         });
         quote! {
-            std::collections::HashMap::<usize, std::collections::HashMap<parser::TerminalSymbol<usize, ()>, parser::Action<usize, usize>>>::from([#(#action_table_constructor),*])
+            std::collections::HashMap::<usize, std::collections::HashMap<parser::TerminalSymbol<usize, ()>, parser::Action<usize, usize>>>::from_iter(vec![#(#action_table_constructor),*])
         }
     };
     let error_rules_constructor = {
         let error_rules_constructor = error_rules.into_iter().map(|(key, value)| {
             let value_constructor = value.into_iter();
             quote! {
-                (#key, std::collections::HashSet::<usize>::from([#(#value_constructor),*]))
+                (#key, std::collections::HashSet::<usize>::from_iter(vec![#(#value_constructor),*]))
             }
         });
         quote! {
-            std::collections::HashMap::<usize, std::collections::HashSet<usize>>::from([#(#error_rules_constructor),*])
+            std::collections::HashMap::<usize, std::collections::HashSet<usize>>::from_iter(vec![#(#error_rules_constructor),*])
         }
     };
     let rules_constructor = rules.into_iter().enumerate().map(|(i, rule)| {
