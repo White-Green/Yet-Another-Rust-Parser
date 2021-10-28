@@ -349,20 +349,11 @@ pub fn parser(input: TokenStream) -> TokenStream {
     if !warnings.is_empty() {
         eprintln!("warnings in construct parser {:?}", warnings);
     }
-    let goto_table_constructor = {
-        let goto_table_constructor = goto_table.into_iter().map(|(key, value)| {
-            let value_constructor = value.into_iter().map(|(key, value)| quote! { (symbols[#key], #value) });
-            quote! {
-                (#key, std::collections::HashMap::<usize, usize>::from_iter(vec![#(#value_constructor),*]))
-            }
-        });
-        quote! {
-            std::collections::HashMap::<usize, std::collections::HashMap<usize, usize>>::from_iter(vec![#(#goto_table_constructor),*])
-        }
-    };
     let action_table_constructor = {
+        let action_table_size = action_table.len();
         let action_table_constructor = action_table.into_iter().map(|(key, value)| {
-            let key_value_list = value.into_iter().map(|(key, value)| {
+            let value_size = value.len();
+            let value_constructor = value.into_iter().map(|(key, value)| {
                 let key = match key {
                     TerminalSymbol::Symbol(s) => {
                         quote! { parser::TerminalSymbol::Symbol(tokens[#s]) }
@@ -375,26 +366,74 @@ pub fn parser(input: TokenStream) -> TokenStream {
                     Action::Reduce(r) => quote! { parser::Action::Reduce(#r) },
                     Action::Accept => quote! { parser::Action::Accept },
                 };
-                quote! { (#key, #value) }
+                quote! { value.insert(#key, #value); }
             });
 
             quote! {
-                (#key, std::collections::HashMap::<parser::TerminalSymbol<usize, ()>, parser::Action<usize, usize>>::from_iter(vec![#(#key_value_list),*]))
+                let value = {
+                    let mut value: std::collections::HashMap<parser::TerminalSymbol<usize, ()>, parser::Action<usize, usize>> = std::collections::HashMap::<parser::TerminalSymbol<usize, ()>, parser::Action<usize, usize>>::with_capacity(#value_size);
+                    #(#value_constructor)*
+                    value.shrink_to_fit();
+                    value
+                };
+                action_table.insert(#key, value);
             }
         });
         quote! {
-            std::collections::HashMap::<usize, std::collections::HashMap<parser::TerminalSymbol<usize, ()>, parser::Action<usize, usize>>>::from_iter(vec![#(#action_table_constructor),*])
+            {
+                let mut action_table: std::collections::HashMap<usize, std::collections::HashMap<parser::TerminalSymbol<usize, ()>, parser::Action<usize, usize>>> = std::collections::HashMap::<usize, std::collections::HashMap<parser::TerminalSymbol<usize, ()>, parser::Action<usize, usize>>>::with_capacity(#action_table_size);
+                #(#action_table_constructor)*
+                action_table.shrink_to_fit();
+                action_table
+            }
+        }
+    };
+    let goto_table_constructor = {
+        let goto_table_size = goto_table.len();
+        let goto_table_constructor = goto_table.into_iter().map(|(key, value)| {
+            let value_size = value.len();
+            let value_constructor = value.into_iter().map(|(key, value)| quote! {value.insert(symbols[#key], #value);});
+            quote! {
+                let value = {
+                    let mut value: std::collections::HashMap<usize, usize> = std::collections::HashMap::<usize, usize>::with_capacity(#value_size);
+                    #(#value_constructor)*
+                    value.shrink_to_fit();
+                    value
+                };
+                goto_table.insert(#key, value);
+            }
+        });
+        quote! {
+            {
+                let mut goto_table: std::collections::HashMap<usize, std::collections::HashMap<usize, usize>> = std::collections::HashMap::<usize, std::collections::HashMap<usize, usize>>::with_capacity(#goto_table_size);
+                #(#goto_table_constructor)*
+                goto_table.shrink_to_fit();
+                goto_table
+            }
         }
     };
     let error_rules_constructor = {
+        let error_rules_size = error_rules.len();
         let error_rules_constructor = error_rules.into_iter().map(|(key, value)| {
-            let value_constructor = value.into_iter();
+            let value_size = value.len();
+            let value_constructor = value.into_iter().map(|v| quote! { value.insert(#v); });
             quote! {
-                (#key, std::collections::HashSet::<usize>::from_iter(vec![#(#value_constructor),*]))
+                let value = {
+                    let mut value: std::collections::HashSet<usize> = std::collections::HashSet::<usize>::with_capacity(#value_size);
+                    #(#value_constructor)*
+                    value.shrink_to_fit();
+                    value
+                };
+                error_rules.insert(#key, value);
             }
         });
         quote! {
-            std::collections::HashMap::<usize, std::collections::HashSet<usize>>::from_iter(vec![#(#error_rules_constructor),*])
+            {
+                let mut error_rules: std::collections::HashMap<usize, std::collections::HashSet<usize>> = std::collections::HashMap::<usize, std::collections::HashSet<usize>>::with_capacity(#error_rules_size);
+                #(#error_rules_constructor)*
+                error_rules.shrink_to_fit();
+                error_rules
+            }
         }
     };
     let rules_constructor = rules.into_iter().enumerate().map(|(i, rule)| {

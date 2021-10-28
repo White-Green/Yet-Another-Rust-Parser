@@ -90,7 +90,11 @@ pub fn tokenizer(input: TokenStream) -> TokenStream {
             let (start, end): (Vec<_>, Vec<_>) = key.into_iter().map(|CharRange { range: Range { start, end } }| (start, end)).unzip();
 
             quote! {
-                std::collections::BTreeMap::<tokenizer::CharRange, usize>::from_iter(vec![#((tokenizer::CharRange { range: #start..#end }, #value)),*])
+                {
+                    let mut map = std::collections::BTreeMap::<tokenizer::CharRange, usize>::new();
+                    #(map.insert(tokenizer::CharRange { range: #start..#end }, #value);)*
+                    map
+                }
             }
         });
         quote! {
@@ -102,7 +106,12 @@ pub fn tokenizer(input: TokenStream) -> TokenStream {
     let end_constructor = {
         let (key, value): (Vec<_>, Vec<_>) = end.into_iter().unzip();
         quote! {
-            std::collections::HashMap::<usize, usize>::from_iter(vec![#((#key, #value)),*])
+            {
+                let mut map = std::collections::HashMap::<usize, usize>::new();
+                #(map.insert(#key, #value);)*
+                map.shrink_to_fit();
+                map
+            }
         }
     };
     let enum_maker_constructor = quote! {
